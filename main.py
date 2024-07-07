@@ -109,7 +109,7 @@ def canWeTrade(minimumBalance, maximumBalance) -> bool:
     """ here we check how much is available in the trading account and we start trading if we are less than 1100 and higher than 500"""
     trade = False
     global DAYCOUNT 
-    withdrawable = float(rh.profiles.load_portfolio_profile().get('withdrawable_amount'))
+    withdrawable = float(rh.profiles.load_account_profile().get('portfolio_cash'))
     DAYCOUNT += 1
     if withdrawable > minimumBalance and withdrawable < maximumBalance:
         trade = True

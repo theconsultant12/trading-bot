@@ -1,6 +1,7 @@
 from multiprocessing import Pool
 from datetime import datetime
 import time
+import robin_stocks.robinhood as rh
 
 current_dateTime = datetime.now()
 
@@ -10,6 +11,8 @@ now = datetime.now()
 current_date = now.strftime("%Y-%m-%d")
 print(current_date)
 
+withdrawable = float(rh.profiles.load_account_profile().get('withdrawable_amount'))
+withdrawable = float(rh.profiles.load_portfolio_profile().get('withdrawable_amount'))
 def f(x):
     return x*x
 
