@@ -121,7 +121,19 @@ def canWeTrade(minimumBalance, maximumBalance) -> bool:
         logging.info(f"we can no longer trade. your balance is either greate than {minimumBalance} or higher than the {maximumBalance} \n your spending balance is {withdrawable}")
         
     return trade
+  
+# stockArray = []   
+# stockraw = []
+# response = rh.markets.get_all_stocks_from_market_tag(group)
+# for stock in response:
+#     stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
+#     if stock.get("ask_price") < 200:
+#         stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+        
+# print(stockArray)
+
     
+
 
 
 def getAllTrades(group) -> dict:
@@ -144,7 +156,8 @@ def getAllTrades(group) -> dict:
         response = rh.markets.get_all_stocks_from_market_tag(group)
         DAYCOUNT += 1
         for stock in response:
-            stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+            if float(stock.get("ask_price")) < 200:
+                stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
         for stock in stockArray:
             for key, value in stock.items():
                  value = float(value)
@@ -194,7 +207,7 @@ def monitorBuy(stock) -> int:
     average = sum(prices) / len(prices)
     # we are trying to spend a reasonable amount per stock buy
     logging.info(average)
-    quantity = int(50/average)
+    quantity = int(500/average)
     count = 0
     while float(rh.stocks.get_latest_price(stock)[0]) > average:
         logging.info(f"waiting for price to drop. average is {average}")
@@ -251,8 +264,24 @@ def main():
     login(24, u, p)
     startBalance = getCurrentBalance()
     estimatedProfitorLoss = 0
+    #####################################################
+    ## TEST SUITE
+    #####################################################
     buyprice = rh.orders.order_buy_market("AMGN", 1) 
     print(buyprice)
+    stockArray = []   
+    stockraw = []
+    for stock in response:
+        stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
+        if float(stock.get("ask_price")) < 200.0:
+            stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+            
+    print(len(stockArray))
+    print(len(stockraw))
+
+    #####################################################
+    ## TEST SUITE
+    #####################################################
     #write sms post message
     message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
     send_message("6185810303", "tmobile", message)
