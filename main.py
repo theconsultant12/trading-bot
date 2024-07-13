@@ -110,6 +110,7 @@ def canWeTrade(minimumBalance, maximumBalance) -> bool:
     trade = False
     global DAYCOUNT 
     withdrawable = float(rh.profiles.load_account_profile().get('portfolio_cash'))
+
     DAYCOUNT += 1
     if withdrawable > minimumBalance and withdrawable < maximumBalance:
         trade = True
@@ -196,14 +197,15 @@ def monitorBuy(stock) -> int:
     quantity = int(50/average)
     count = 0
     while float(rh.stocks.get_latest_price(stock)[0]) > average:
-        logging.info("waiting for price to drop")
+        logging.info(f"waiting for price to drop. average is {average}")
         count += 1
         DAYCOUNT += 1
+        time.sleep(20)
         if count%49 == 0:
-            time.sleep(1)
-    buyprice = orders.order_buy_market(stock, quantity)  
+            time.sleep(10)
+    buyprice = rh.orders.order_buy_market(stock, quantity)  
     time.sleep(10)
-    logging.info("stock bought at {buyprice} after checking {count} times")
+    logging.info(f"stock bought at {buyprice} after checking {count} times")
     count = 0
     while float(rh.stocks.get_latest_price(stock)[0]) < average:
         logging.info("waiting for price to rise")
@@ -211,8 +213,10 @@ def monitorBuy(stock) -> int:
         DAYCOUNT += 1
         if count%49 == 0:
             time.sleep(1)
-    sellprice = orders.order_sell_market(stock, quantity)  
-    logging.info("stock bought at {sellprice} after checking {count} times") 
+    sellprice = rh.orders.order_sell_market(stock, quantity)  
+    print(sellprice)
+    logging.info(f"stock bought at {sellprice} after checking {count} times") 
+    print(buyprice)
     diff = sellprice - buyprice
     logging.info(f'we made {diff} on this sale')
     return diff
@@ -247,15 +251,19 @@ def main():
     login(24, u, p)
     startBalance = getCurrentBalance()
     estimatedProfitorLoss = 0
+    buyprice = rh.orders.order_buy_market("AMGN", 1) 
+    print(buyprice)
     #write sms post message
     message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
     send_message("6185810303", "tmobile", message)
     
-    while canWeTrade(50, 1000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT >= DAILYAPILIMIT:
+    while canWeTrade(50, 1000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
         topTrade = getAllTrades(args.group)
+        logging.info(f"these are the stocks we are trading{topTrade}")
         for item in topTrade:
+            logging.info(f"trading {item}")
             diff = monitorBuy(item)
-            estimatedProfitOrLoss += diff
+            estimatedProfitorLoss += diff
             time.sleep(10)
         time.sleep(20)
 
@@ -264,7 +272,7 @@ def main():
     if startBalance - getCurrentBalance() < 50:
         reason = "we lost 50 dollars already during today's trade"     
         
-        
+    logging.info(reason)   
     endBalance = getCurrentBalance()
     
     if endBalance > startBalance:
