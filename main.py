@@ -228,7 +228,7 @@ def monitorBuy(stock) -> int:
             time.sleep(1)
     sellprice = rh.orders.order_sell_market(stock, quantity)  
     print(sellprice)
-    logging.info(f"stock bought at {sellprice} after checking {count} times") 
+    logging.info(f"stock sold at {sellprice} after checking {count} times") 
     print(buyprice)
     diff = sellprice - buyprice
     logging.info(f'we made {diff} on this sale')
@@ -267,17 +267,17 @@ def main():
     #####################################################
     ## TEST SUITE
     #####################################################
-    buyprice = rh.orders.order_buy_market("AMGN", 1) 
-    print(buyprice)
-    stockArray = []   
-    stockraw = []
-    for stock in response:
-        stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
-        if float(stock.get("ask_price")) < 200.0:
-            stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+    # buyprice = rh.orders.order_buy_market("AMGN", 1) 
+    # print(buyprice)
+    # stockArray = []   
+    # stockraw = []
+    # for stock in response:
+    #     stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
+    #     if float(stock.get("ask_price")) < 200.0:
+    #         stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
             
-    print(len(stockArray))
-    print(len(stockraw))
+    # print(len(stockArray))
+    # print(len(stockraw))
 
     #####################################################
     ## TEST SUITE
