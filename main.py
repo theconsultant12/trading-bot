@@ -207,7 +207,8 @@ def monitorBuy(stock) -> int:
         logging.info(average)
         quantity = int(500/average)
         count = 0
-        while float(rh.stocks.get_latest_price(stock)[0]) > average:
+        priceBefore = getCurrentBalance()
+        while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.02):
             logging.info(f"waiting for price to drop. average is {average}")
             count += 1
             DAYCOUNT += 1
@@ -218,15 +219,17 @@ def monitorBuy(stock) -> int:
         time.sleep(10)
         logging.info(f"stock bought at {buyprice} after checking {count} times")
         count = 0
-        while float(rh.stocks.get_latest_price(stock)[0]) < average:
+        while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.02):
             logging.info("waiting for price to rise")
             count += 1
             DAYCOUNT += 1
+            time.sleep(2)
             if count%49 == 0:
-                time.sleep(1)
+                time.sleep(10)
         sellprice = rh.orders.order_sell_market(stock, quantity)  
-        logging.info(f"stock bought at {sellprice} after checking {count} times") 
-        diff = sellprice - buyprice
+        logging.info(f"stock sold at {sellprice} after checking {count} times") 
+        priceAfter = getCurrentBalance()
+        diff = priceAfter - priceBefore
         logging.info(f'we made {diff} on this sale')
     except Exception as e:
         logging.error(f"Error in monitorBuy: {str(e)}")
@@ -272,17 +275,17 @@ def main():
         #####################################################
         ## TEST SUITE
         #####################################################
-        buyprice = rh.orders.order_buy_market("AMGN", 1) 
-        print(buyprice)
-        stockArray = []   
-        stockraw = []
-        for stock in response:
-            stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
-            if float(stock.get("ask_price")) < 200.0:
-                stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+        # buyprice = rh.orders.order_buy_market("AMGN", 1) 
+        # print(buyprice)
+        # stockArray = []   
+        # stockraw = []
+        # for stock in response:
+        #     stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
+        #     if float(stock.get("ask_price")) < 200.0:
+        #         stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
                 
-        print(len(stockArray))
-        print(len(stockraw))
+        # print(len(stockArray))
+        # print(len(stockraw))
 
         #####################################################
         ## TEST SUITE
@@ -291,7 +294,7 @@ def main():
         message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
         send_message("6185810303", "tmobile", message)
         
-        while canWeTrade(50, 1000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(2900, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             for item in topTrade:
