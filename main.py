@@ -208,8 +208,8 @@ def monitorBuy(stock) -> int:
         quantity = int(500/average)
         count = 0
         priceBefore = getCurrentBalance()
-        while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.02):
-            logging.info(f"waiting for price to drop. average is {average}")
+        while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
+            logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(stock)[0]}")
             count += 1
             DAYCOUNT += 1
             time.sleep(20)
@@ -219,8 +219,8 @@ def monitorBuy(stock) -> int:
         time.sleep(10)
         logging.info(f"stock bought at {buyprice} after checking {count} times")
         count = 0
-        while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.02):
-            logging.info("waiting for price to rise")
+        while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
+            logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
             count += 1
             DAYCOUNT += 1
             time.sleep(2)
@@ -260,7 +260,7 @@ def append_items_to_csv(items, filename):
 def main():
     try:
         # Create the parser
-        parser = argparse.ArgumentParser(description='Which of the sectors will you like to trade biopharmaceutical \n upcoming-earnings \nmost-popular-under-25 \ntechnology')
+        parser = argparse.ArgumentParser(description='Which of the sectors will you like to trade biopharmaceutical \nupcoming-earnings \nmost-popular-under-25 \ntechnology')
 
         # Add arguments
         parser.add_argument('-g', '--group', type=str, required=True, help='The group of stocks to trade')
@@ -275,17 +275,8 @@ def main():
         #####################################################
         ## TEST SUITE
         #####################################################
-        # buyprice = rh.orders.order_buy_market("AMGN", 1) 
-        # print(buyprice)
-        # stockArray = []   
-        # stockraw = []
-        # for stock in response:
-        #     stockraw.append({stock.get("symbol"):stock.get("ask_price")}) 
-        #     if float(stock.get("ask_price")) < 200.0:
-        #         stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
-                
-        # print(len(stockArray))
-        # print(len(stockraw))
+        # response = rh.markets.get_all_stocks_from_market_tag("technology")
+        # print(response)
 
         #####################################################
         ## TEST SUITE
@@ -294,7 +285,7 @@ def main():
         message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
         send_message("6185810303", "tmobile", message)
         
-        while canWeTrade(2900, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(1500, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             for item in topTrade:
@@ -306,7 +297,7 @@ def main():
 
         if DAYCOUNT >= DAILYAPILIMIT:
             reason = "daily api limit reached"   
-        if startBalance - getCurrentBalance() < 50:
+        if startBalance - getCurrentBalance() - startBalance == 50:
             reason = "we lost 50 dollars already during today's trade"     
             
         logging.info(reason)   
