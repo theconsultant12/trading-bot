@@ -133,7 +133,7 @@ def canWeTrade(minimumBalance, maximumBalance) -> bool:
     return trade
 
 
-def getAllTrades(group) -> dict:
+def oldgetAllTrades(group) -> dict:
     """Here we get the stocks that exist under the category tag
     ‘biopharmaceutical’
     upcoming-earnings
@@ -148,12 +148,13 @@ def getAllTrades(group) -> dict:
     stockList = []
     logging.info("getting all top moving trades in the past 40 seconds")
     try:
-        while count < 20:
+        while count < 10:
             response = rh.markets.get_all_stocks_from_market_tag(group)
             DAYCOUNT += 1
-            for stock in response:
+            for stock in response[:500]:
                 if float(stock.get("ask_price")) < 200:
                     stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+            # logging.info(f"stock retrieved {stockArray}")
             for stock in stockArray:
                 for key, value in stock.items():
                     value = float(value)
@@ -165,9 +166,9 @@ def getAllTrades(group) -> dict:
                 else:
                     min_max_values[key] = {'min': value, 'max': value}
             count += 1
-            time.sleep(2)
+            
         # Calculate the differences and percentage changes and store them in a list of tuples
-        differences = [(stock, values['max'] - values['min'], ((values['max'] - values['min']) / values['min']) * 100) for stock, values in min_max_values.items()]
+        differences = [(stock, values['max'] - values['min']) for stock, values in min_max_values.items()]
         logging.info("analysis completed")
         # Filter out stocks with no difference
         differences = [item for item in differences if item[1] != 0]
@@ -189,6 +190,60 @@ def getAllTrades(group) -> dict:
         logging.error(f"Error in getAllTrades: {str(e)}")
     return stockList
 
+def getAllTrades(group) -> list:
+    """Here we get the stocks that exist under the category tag
+    ‘biopharmaceutical’, ‘upcoming-earnings’, ‘most-popular-under-25’, ‘technology’"""
+    global DAYCOUNT 
+    count = 0
+    min_max_values = {}
+    stockArray = []
+    stockList = []
+    logging.info("getting all top moving trades in the past 40 seconds")
+
+    try:
+        while count < 10:
+            response = rh.markets.get_all_stocks_from_market_tag(group)
+            DAYCOUNT += 1
+            for stock in response[:500]:
+                if float(stock.get("ask_price")) < 200:
+                    stockArray.append({stock.get("symbol"): stock.get("ask_price")})
+
+            for stock in stockArray:
+                for key, value in stock.items():
+                    value = float(value)
+                    if key in min_max_values:
+                        if value < min_max_values[key]['min']:
+                            min_max_values[key]['min'] = value
+                        if value > min_max_values[key]['max']:
+                            min_max_values[key]['max'] = value
+                    else:
+                        min_max_values[key] = {'min': value, 'max': value}
+            count += 1
+
+        # Calculate the differences and store them in a list of tuples
+        differences = [(stock, values['max'] - values['min']) for stock, values in min_max_values.items()]
+
+        # Filter out stocks with no difference
+        differences = [item for item in differences if item[1] != 0]
+
+        # Sort the list by the differences in descending order
+        differences.sort(key=lambda x: x[1], reverse=True)
+
+        # Log the top 5 differences
+        if differences:
+            logging.info("Top 5 stocks with the highest differences:")
+            for i in range(min(5, len(differences))):
+                stock, difference = differences[i]
+                logging.info(f'{stock} - Difference: {difference}')
+                stockList.append(stock)
+        else:
+            logging.info('No differences found.')
+
+        logging.info("Stock list generated successfully")
+    except Exception as e:
+        logging.error(f"Error in getAllTrades: {str(e)}")
+
+    return stockList
 
 def monitorBuy(stock) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
@@ -276,7 +331,11 @@ def main():
         ## TEST SUITE
         #####################################################
         # response = rh.markets.get_all_stocks_from_market_tag("technology")
-        # print(response)
+        # stockArray = []
+        # for stock in response[:500]:
+        #     if float(stock.get("ask_price")) < 200:
+        #         stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
+        # print(stockArray)
 
         #####################################################
         ## TEST SUITE
