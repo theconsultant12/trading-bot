@@ -245,6 +245,19 @@ def getAllTrades(group) -> list:
 
     return stockList
 
+def checkTime():
+    """look through the time and compare to 9:30ET to 3:30ET return true if the time is within this window"""
+    tradeTime = False
+    tradeDate = False
+    now = datetime.now()
+    startTrade = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    endTrade = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    if now > startTrade and now < endTrade:
+        tradeTime = True
+    if datetime.today().weekday() in range(6):
+        tradeDate = True
+    return tradeTime and tradeDate
+
 def monitorBuy(stock) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
@@ -264,6 +277,9 @@ def monitorBuy(stock) -> int:
         count = 0
         priceBefore = getCurrentBalance()
         while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
+            if not checkTime():
+                logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
+                time.sleep(3600)
             logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(stock)[0]}")
             count += 1
             DAYCOUNT += 1
@@ -275,6 +291,9 @@ def monitorBuy(stock) -> int:
         logging.info(f"stock bought at {buyprice} after checking {count} times")
         count = 0
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
+            if not checkTime():
+                logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
+                time.sleep(3600)
             logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
             count += 1
             DAYCOUNT += 1
@@ -382,3 +401,4 @@ def main():
 
 if __name__ == '__main__':  
     main()
+
