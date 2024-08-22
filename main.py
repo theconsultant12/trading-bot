@@ -288,7 +288,7 @@ def monitorBuy(stock) -> int:
                 time.sleep(10)
         buyprice = rh.orders.order_buy_market(stock, quantity)  
         time.sleep(10)
-        logging.info(f"stock bought at {buyprice} after checking {count} times")
+        logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         count = 0
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
             if not checkTime():
