@@ -363,7 +363,7 @@ def main():
         message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
         send_message("6185810303", "tmobile", message)
         
-        while canWeTrade(1500, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(1200, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             for item in topTrade:
