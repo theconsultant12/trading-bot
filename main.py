@@ -300,7 +300,8 @@ def monitorBuy(stock) -> int:
             time.sleep(2)
             if count%49 == 0:
                 time.sleep(10)
-        sellprice = rh.orders.order_sell_market(stock, quantity)  
+        #sellprice = rh.orders.order_sell_market(stock, quantity) 
+        sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
         logging.info(f"stock sold at {sellprice} after checking {count} times") 
         priceAfter = getCurrentBalance()
         diff = priceAfter - priceBefore
