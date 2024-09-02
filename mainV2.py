@@ -12,7 +12,7 @@ import os
 import argparse
 import csv
 import boto3
-
+from predict_stock import run_lstm
 
 DAYCOUNT = 0
 DAILYAPILIMIT = 19000
@@ -288,7 +288,7 @@ def monitorBuy(stock) -> int:
                 time.sleep(10)
         buyprice = rh.orders.order_buy_market(stock, quantity)  
         time.sleep(10)
-        logging.info(f"stock bought at {buyprice} after checking {count} times")
+        logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         count = 0
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
             if not checkTime():
@@ -300,7 +300,8 @@ def monitorBuy(stock) -> int:
             time.sleep(2)
             if count%49 == 0:
                 time.sleep(10)
-        sellprice = rh.orders.order_sell_market(stock, quantity)  
+        # sellprice = rh.orders.order_sell_market(stock, quantity)  
+        sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
         logging.info(f"stock sold at {sellprice} after checking {count} times") 
         priceAfter = getCurrentBalance()
         diff = priceAfter - priceBefore
@@ -363,9 +364,14 @@ def main():
         message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
         send_message("6185810303", "tmobile", message)
         
-        while canWeTrade(1500, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(900, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
+            run_lstm("NVDA")
+            for item in topTrade:
+                run_lstm(item)
+                if float(rh.stocks.get_latest_price(item)[0]) > run_lstm(item):
+                    topTrade.pop(item)
             for item in topTrade:
                 logging.info(f"trading {item}")
                 diff = monitorBuy(item)
@@ -401,7 +407,3 @@ def main():
 
 if __name__ == '__main__':  
     main()
-
-
-
-# goal is to make it run forever
