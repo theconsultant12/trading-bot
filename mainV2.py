@@ -13,6 +13,8 @@ import argparse
 import csv
 import boto3
 from predict_stock import run_lstm
+from predict_stock_granular import run_lstm_granular
+
 
 DAYCOUNT = 0
 DAILYAPILIMIT = 19000
@@ -350,12 +352,7 @@ def main():
         #####################################################
         ## TEST SUITE
         #####################################################
-        # response = rh.markets.get_all_stocks_from_market_tag("technology")
-        # stockArray = []
-        # for stock in response[:500]:
-        #     if float(stock.get("ask_price")) < 200:
-        #         stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
-        # print(stockArray)
+        #print(rh.stocks.get_stock_historicals("NVDA",interval="10minute"))
 
         #####################################################
         ## TEST SUITE
@@ -369,14 +366,14 @@ def main():
             logging.info(f"these are the stocks we are trading{topTrade}")
             run_lstm("NVDA")
             for item in topTrade:
-                run_lstm(item)
-                if float(rh.stocks.get_latest_price(item)[0]) > run_lstm(item):
-                    topTrade.pop(item)
-            for item in topTrade:
-                logging.info(f"trading {item}")
-                diff = monitorBuy(item)
-                estimatedProfitorLoss += diff
-                time.sleep(10)
+                data = rh.stocks.get_stock_historicals("NVDA",interval="hour", span="month")
+                run_lstm_granular(data)
+                #run_lstm(item) this is for daily data
+                if float(rh.stocks.get_latest_price(item)[0]) < run_lstm_granular(item):
+                    logging.info(f"trading {item}")
+                    diff = monitorBuy(item)
+                    estimatedProfitorLoss += diff
+                    time.sleep(10)
             time.sleep(20)
 
         if DAYCOUNT >= DAILYAPILIMIT:
