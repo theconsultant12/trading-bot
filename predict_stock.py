@@ -122,6 +122,7 @@ def run_lstm(stock):
     plt.title(f"{stock} Stock Price Prediction for {today}")
     plt.legend()
     plt.grid(True)
+    plt.ion()
     plt.show()
     
     logging.info(f"Plotted the stock price prediction for {stock}")
