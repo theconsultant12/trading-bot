@@ -114,6 +114,7 @@ def run_lstm_granular(data):
     plt.title(f"Stock Price Prediction for {today}")
     plt.legend()
     plt.grid(True)
+    plt.ion()
     plt.show()
     
     logging.info("Plotted the stock price prediction")
