@@ -341,6 +341,7 @@ def main():
 
         # Add arguments
         parser.add_argument('-g', '--group', type=str, required=True, help='The group of stocks to trade')
+        parser.add_argument('-m', '--mode', type=str, required=True, help='The group of stocks to trade')
 
         # Parse the arguments
         args = parser.parse_args()
@@ -361,19 +362,25 @@ def main():
         message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
         send_message("6185810303", "tmobile", message)
         
-        while canWeTrade(900, 4000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(500, 22000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
-            run_lstm("NVDA")
+            #run_lstm("NVDA")
             for item in topTrade:
-                data = rh.stocks.get_stock_historicals("NVDA",interval="hour", span="month")
-                run_lstm_granular(data)
-                #run_lstm(item) this is for daily data
-                if float(rh.stocks.get_latest_price(item)[0]) < run_lstm_granular(item):
-                    logging.info(f"trading {item}")
-                    diff = monitorBuy(item)
-                    estimatedProfitorLoss += diff
-                    time.sleep(10)
+                if args.mode == "granular":
+                    run_lstm_granular(item)
+                    if float(rh.stocks.get_latest_price(item)[0]) < run_lstm_granular(item):
+                        logging.info(f"trading {item}")
+                        diff = monitorBuy(item)
+                        estimatedProfitorLoss += diff
+                        time.sleep(10)
+                else:
+                    run_lstm(item)
+                    if float(rh.stocks.get_latest_price(item)[0]) < run_lstm(item):
+                        logging.info(f"trading {item}")
+                        diff = monitorBuy(item)
+                        estimatedProfitorLoss += diff
+                        time.sleep(10)
             time.sleep(20)
 
         if DAYCOUNT >= DAILYAPILIMIT:
