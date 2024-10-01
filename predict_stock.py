@@ -4,7 +4,7 @@ import datetime
 import pandas as pd
 import time
 from datetime import timedelta
-import matplotlib.pyplot as plt
+from matplotlib import pyplot as plt
 import numpy as np
 import logging
 from tensorflow.keras.models import Sequential
