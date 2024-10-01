@@ -6,6 +6,7 @@ import logging
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import layers
+import robin_stocks.robinhood as rh
 
 def preprocess_data(data):
     """
@@ -58,9 +59,10 @@ def windowed_df_to_date_X_y(windowed_dataframe):
     logging.info("Converted windowed DataFrame to X and Y datasets")
     return dates, X.astype(np.float32), Y.astype(np.float32)
 
-def run_lstm_granular(data):
-    logging.info("Running LSTM model")
+def run_lstm_granular(item):
+    logging.info("Running LSTM granular model")
     
+    data = rh.stocks.get_stock_historicals(item,interval="hour", span="month")
     # Preprocess the input data
     df = preprocess_data(data)
 
@@ -105,7 +107,7 @@ def run_lstm_granular(data):
     # Add the predicted price to the DataFrame for visualization
     df.loc[now] = predicted_price[0][0]
 
-    # Plot historical prices and the predicted price
+    #Plot historical prices and the predicted price
     plt.figure(figsize=(10, 6))
     plt.plot(df.index[:-1], df['Close'][:-1], label='Historical Prices')
     plt.plot(df.index[-2:], df['Close'][-2:], 'r--', label=f'Predicted Price for {today}')
