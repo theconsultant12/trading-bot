@@ -104,8 +104,8 @@ def run_lstm_granular(item):
 
     logging.info(f"Predicted price: {predicted_price[0][0]}")
 
-    # Add the predicted price to the DataFrame for visualization
-    df.loc[now] = predicted_price[0][0]
+    # Reindexing the dates to avoid plotting errors
+    df.index = pd.to_datetime(df.index)
 
     #Plot historical prices and the predicted price
     plt.figure(figsize=(10, 6))
