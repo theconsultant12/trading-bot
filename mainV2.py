@@ -14,6 +14,7 @@ import csv
 import boto3
 from predict_stock import run_lstm
 from predict_stock_granular import run_lstm_granular
+import pandas as pd
 
 
 DAYCOUNT = 0
@@ -260,19 +261,45 @@ def checkTime():
         tradeDate = True
     return tradeTime and tradeDate
 
+def getWeightedAverage(stock):
+    data = rh.stocks.get_stock_historicals(stock,interval="10minute", span="day")
+        
+    data_hour = data[-10:]
+    combined = data + data_hour
+
+    df = pd.DataFrame(combined)
+    
+    # Convert prices to numeric values
+    df['open_price'] = pd.to_numeric(df['open_price'])
+    df['close_price'] = pd.to_numeric(df['close_price'])
+    df['high_price'] = pd.to_numeric(df['high_price'])
+    df['low_price'] = pd.to_numeric(df['low_price'])
+
+
+    avg_open = df['open_price'].mean()
+    avg_close = df['close_price'].mean()
+    # avg_high = df['high_price'].mean()
+    # avg_low = df['low_price'].mean()
+    dayaverage = (avg_open + avg_close)/2 
+    return(dayaverage)
+
 def monitorBuy(stock) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
     global DAYCOUNT 
     try:
-        for i in range(10):
-            response = rh.stocks.get_latest_price(stock)
-            DAYCOUNT += 1
+
+
+        # this is the old method and we have found that it is not consistent
+        # for i in range(10):
+        #     response = rh.stocks.get_latest_price(stock)
+        #     DAYCOUNT += 1
             
-            prices.append(float(response[0]))
+        #     prices.append(float(response[0]))
             
-            time.sleep(2)
-        average = sum(prices) / len(prices)
+        #     time.sleep(2)
+        # average = sum(prices) / len(prices)
+        average = getWeightedAverage(stock)
         # we are trying to spend a reasonable amount per stock buy
         logging.info(average)
         quantity = int(500/average)
@@ -353,8 +380,31 @@ def main():
         #####################################################
         ## TEST SUITE
         #####################################################
-        #print(rh.stocks.get_stock_historicals("NVDA",interval="10minute"))
+        # data = rh.stocks.get_stock_historicals("ORCL",interval="10minute", span="day")
+        
+        # data_hour = data[-10:]
+        # combined = data + data_hour
+        
+        # # print(len(combined))
 
+
+        # df = pd.DataFrame(combined)
+        
+        # # Convert prices to numeric values
+        # df['open_price'] = pd.to_numeric(df['open_price'])
+        # df['close_price'] = pd.to_numeric(df['close_price'])
+        # df['high_price'] = pd.to_numeric(df['high_price'])
+        # df['low_price'] = pd.to_numeric(df['low_price'])
+
+        # # Calculate averages
+        # avg_open = df['open_price'].mean()
+        # avg_close = df['close_price'].mean()
+        # # avg_high = df['high_price'].mean()
+        # # avg_low = df['low_price'].mean()
+        # dayaverage = (avg_open + avg_close)/2 
+        # print(dayaverage)
+
+        # exit()
         #####################################################
         ## TEST SUITE
         #####################################################
