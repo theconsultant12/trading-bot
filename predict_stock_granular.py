@@ -7,6 +7,8 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import layers
 import robin_stocks.robinhood as rh
+import webbrowser
+import os
 
 def preprocess_data(data):
     """
@@ -59,7 +61,7 @@ def windowed_df_to_date_X_y(windowed_dataframe):
     logging.info("Converted windowed DataFrame to X and Y datasets")
     return dates, X.astype(np.float32), Y.astype(np.float32)
 
-def run_lstm_granular(item):
+def run_lstm_granular(item, price):
     logging.info("Running LSTM granular model")
     
     data = rh.stocks.get_stock_historicals(item,interval="hour", span="month")
@@ -102,7 +104,7 @@ def run_lstm_granular(item):
     now = datetime.datetime.now()
     today = now.strftime("%Y-%m-%d")
 
-    logging.info(f"Predicted price: {predicted_price[0][0]}")
+    logging.info(f"Predicted price: {predicted_price[0][0]} the current price is {price}")
 
     # Reindexing the dates to avoid plotting errors
     df.index = pd.to_datetime(df.index)
@@ -113,13 +115,20 @@ def run_lstm_granular(item):
     plt.plot(df.index[-2:], df['Close'][-2:], 'r--', label=f'Predicted Price for {today}')
     plt.xlabel('Date')
     plt.ylabel('Close Price')
-    plt.title(f"Stock Price Prediction for {today}")
+    plt.title(f"Stock Price Prediction for {item} {today}")
     plt.legend()
     plt.grid(True)
     plt.ion()
     plt.show()
+    # Save the plot to an image file
+    image_file = f"stock_prediction_{item}_{today}.png"
+    plt.savefig(image_file)
+
+    # Automatically open the saved image in the default browser
+    file_path = os.path.abspath(image_file)
+    webbrowser.open(f"file://{file_path}")
     
-    logging.info("Plotted the stock price prediction")
+    logging.info(f"Plotted the stock price prediction {item} {today}")
 
     return predicted_price[0][0]
 

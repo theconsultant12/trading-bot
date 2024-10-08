@@ -418,8 +418,9 @@ def main():
             #run_lstm("NVDA")
             for item in topTrade:
                 if args.mode == "granular":
-                    predicted_price = run_lstm_granular(item)
                     latest_price = float(rh.stocks.get_latest_price(item)[0])
+                    predicted_price = run_lstm_granular(item, latest_price)
+                    
                     if latest_price > predicted_price:
                         logging.info(f"Predicted price of {item} is less than latest price. moving to the next stock")
                     if latest_price < predicted_price:
@@ -429,8 +430,9 @@ def main():
                         estimatedProfitorLoss += diff
                         time.sleep(10)
                 else:
-                    predicted_price = run_lstm(item)
                     latest_price = float(rh.stocks.get_latest_price(item)[0])
+                    predicted_price = run_lstm(item, latest_price)
+                    
                     if latest_price > predicted_price:
                         logging.info(f"Predicted price of {item} is less than latest price. moving to the next stock")
                     if latest_price < predicted_price:
