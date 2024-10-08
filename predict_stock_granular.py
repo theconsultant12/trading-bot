@@ -62,7 +62,7 @@ def windowed_df_to_date_X_y(windowed_dataframe):
     return dates, X.astype(np.float32), Y.astype(np.float32)
 
 def run_lstm_granular(item, price):
-    logging.info("Running LSTM granular model")
+    logging.info(f"Running LSTM granular model on {item}")
     
     data = rh.stocks.get_stock_historicals(item,interval="hour", span="month")
     # Preprocess the input data
