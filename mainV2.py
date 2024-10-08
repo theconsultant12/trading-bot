@@ -409,7 +409,7 @@ def main():
         ## TEST SUITE
         #####################################################
         #write sms post message
-        message = f"Hello Olusola good morning. We are about to start trading for the day. the starting balance is {startBalance}"
+        message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
         send_message("6185810303", "att", message)
         
         while canWeTrade(500, 22000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
