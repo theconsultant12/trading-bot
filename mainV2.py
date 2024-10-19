@@ -15,6 +15,7 @@ import boto3
 from predict_stock import run_lstm
 from predict_stock_granular import run_lstm_granular
 import pandas as pd
+import atexit
 
 
 DAYCOUNT = 0
@@ -31,6 +32,12 @@ CARRIERS = {
     "verizon": "@vtext.com",
     "sprint": "@messaging.sprintpcs.com"
 }
+
+
+def create_pid_file(pid_file):
+    pid = os.getpid()  # Get the current process ID
+    with open(pid_file, 'w') as f:
+        f.write(str(pid))  # Write PID to the file
 
 
 def get_parameter_value(parameter_name):
@@ -360,9 +367,19 @@ def append_items_to_csv(items, filename):
     except Exception as e:
         logging.error(f"Failed to append items to CSV: {str(e)}")
 
+def remove_pid_file(pid_file):
+    if os.path.exists(pid_file):
+        os.remove(pid_file)
+
+
+pid_file_path = '/tmp/trading-bot-process.pid'  # Path to store PID file
+create_pid_file(pid_file_path)
+logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
+atexit.register(remove_pid_file, pid_file_path)
 
 def main():
     try:
+
         # Create the parser
         parser = argparse.ArgumentParser(description='Which of the sectors will you like to trade biopharmaceutical \nupcoming-earnings \nmost-popular-under-25 \ntechnology')
 
