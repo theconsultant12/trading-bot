@@ -3,4 +3,7 @@ pandas
 matplotlib
 robin_stocks
 boto3
+robin_stocks
+pandas
+matplotlib
 tensorflow
