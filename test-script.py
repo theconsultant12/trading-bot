@@ -9,13 +9,26 @@ now = datetime.now()
 
 # Format the date
 current_date = now.strftime("%Y-%m-%d")
-print(current_date)
 
-withdrawable = float(rh.profiles.load_account_profile().get('withdrawable_amount'))
-withdrawable = float(rh.profiles.load_portfolio_profile().get('withdrawable_amount'))
+
+def checkTime():
+    """look through the time and compare to 9:30ET to 3:30ET return true if the time is within this window"""
+    tradeTime = False
+    tradeDate = False
+    now = datetime.now()
+    startTrade = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    endTrade = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    if now > startTrade and now < endTrade:
+        tradeTime = True
+    if datetime.today().weekday() in range(6):
+        tradeDate = True
+    return tradeTime and tradeDate
+
+print(checkTime())
+
 def f(x):
     return x*x
-
+rh.stocks.get_stock_historicals("NVDA")
 if __name__ == '__main__':
     # get the start time
     # st = time.time()
@@ -36,4 +49,5 @@ if __name__ == '__main__':
     # arrelapsed_time = et - st
     
     # print(f"time of thread = {elapsed_time} \ntime of for = {arrelapsed_time}")
-    print(datetime.date)
+    print(checkTime())
+    rh.stocks.get_stock_historicals("NVDA")
