@@ -1,4 +1,4 @@
-import openai
+
 import pyttsx3
 import os
 import boto3
@@ -11,6 +11,7 @@ import pyaudio
 import subprocess
 import signal
 import time
+from openai import OpenAI
 
 # Initialize the vosk recognizer with a model path
 MODEL_PATH = "/Users/macbook/workspace/rob-test/vosk-model-en-us-0.22-lgraph"  # e.g., "vosk-model-small-en-us-0.15"
@@ -44,9 +45,8 @@ def get_parameter_value(parameter_name):
         print(f"Error occurred: {str(e)}")
         return None
 
-
+openai = OpenAI(api_key=get_parameter_value('/openai/api-key'))
 # Set your OpenAI API key
-openai.api_key = get_parameter_value('/openai/api-key')
 
 
 # Initialize the text-to-speech engine
@@ -96,13 +96,14 @@ def load_recent_logs(hours=1):
         
         return "\n".join(recent_logs) if recent_logs else f"No logs found in the last {hours} hour(s)."
     else:
-        return "Today's log file not found."
+        speak_with_polly("Today's log file not found.")
+        return None
 
 
 def get_date_range(command):
     dateArray = []   
     today = datetime.now()
-    if command == 'yesterday':
+    if 'yesterday' in command:
         yesterday = today - timedelta(days=1)
         if yesterday.weekday() >= 5:
             last_weekday = today - timedelta(days=today.weekday() - 4)
@@ -113,7 +114,7 @@ def get_date_range(command):
             dateArray.append(yesterday.strftime('%Y-%m-%d'))
             return dateArray  # Return as an array
     
-    elif command == 'today':
+    elif 'today' in command:
         if today.weekday() >= 5:
             last_weekday = today - timedelta(days=today.weekday() - 4)
             speak_with_polly(f"The last weekday was: {last_weekday.strftime('%Y-%m-%d')}")
@@ -123,7 +124,7 @@ def get_date_range(command):
             dateArray.append(today.strftime('%Y-%m-%d'))
             return dateArray 
     
-    elif command == 'week':
+    elif 'week' in command:
         for i in range(7):
             day = today + timedelta(days=i)
             if day.weekday() < 5:  # Monday = 0, Tuesday = 1, ..., Friday = 4
@@ -132,7 +133,7 @@ def get_date_range(command):
     
     return dateArray
 
-def load_and_analyze_logs(command, keyword):
+def load_logs_for_analysis(command):
     date_range = get_date_range(command)
     all_logs = ""
 
@@ -142,6 +143,9 @@ def load_and_analyze_logs(command, keyword):
             all_logs += f"\nLogs for {date}:\n{logs}\n"
         else:
             all_logs += f"\nNo logs found for {date}\n"
+    return all_logs
+
+def analyze_logs(keyword, all_logs):
 
     if all_logs:
         analysis = gpt_logs(keyword, all_logs)
@@ -149,7 +153,10 @@ def load_and_analyze_logs(command, keyword):
     else:
         speak_with_polly("No logs were found for the specified date range.")
 
-def start_trading_bot():
+
+
+
+def start_trading_bot(mode, group):
     try:
         # Get the current directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -158,17 +165,12 @@ def start_trading_bot():
         bot_script_path = os.path.join(current_dir, 'mainV2.py')
         
         # Start the trading bot as a subprocess using python3
-        process = subprocess.Popen(['python3', bot_script_path])
+        process = subprocess.Popen(['python3', bot_script_path, '-m', mode, '-g', group])
         
-        # Save the PID to a file
-        pid_file_path = '/tmp/trading-bot-process.pid'
-        with open(pid_file_path, 'w') as f:
-            f.write(str(process.pid))
-        
-        speak_with_polly("Trading bot has been started successfully.")
+        speak_with_polly("bot has been started successfully.")
         return "Trading bot started with PID: " + str(process.pid)
     except Exception as e:
-        error_message = f"Failed to start trading bot. Error: {str(e)}"
+        error_message = f"Failed to start bot. Error: {str(e)}"
         speak_with_polly(error_message)
         return error_message
 
@@ -270,20 +272,24 @@ def stock_bought_handler(symbol, price):
 
 # Function to send the log data to GPT and get an explanation
 def gpt_logs(keyword, log_text):
-    response = openai.Completion.create(
-        model="gpt-4",  # you can switch to another model like gpt-3.5-turbo
-        prompt=f"{keyword} the following logs in simple terms:\n\n{log_text}",
-        max_tokens=300  # Adjust token limit based on the log size
+    response = openai.chat.completions.create(
+        model="gpt-3.5-turbo",  # Updated to "gpt-4-turbo" since "gpt-4o-mini" might be incorrect or unavailable
+        messages=[  # Messages should be a list of dicts
+            {"role": "user", "content": f"{keyword} the following logs in simple terms:\n\n{log_text}"}
+        ]
     )
-    return response.choices[0].text.strip()
+    print(response.choices[0].message.content)
+    return response.choices[0].message.content
+
+    #return response.choices[0].message['content']
 
 
 def currently_trading():
     pid_file_path = '/tmp/trading-bot-process.pid'
     if is_process_running(pid_file_path):
-        return "Process is running."
+        speak_with_polly("The trading bot is running.")
     else:
-        return "Process is not running."
+        speak_with_polly("The trading bot is not running.")
 
 
 def get_time_of_day():
@@ -343,6 +349,19 @@ def recognize_voice():
 
 # Main function that responds to commands
 def main():
+
+    #start_trading_bot("upcoming-earnings", "biopharmaceutical")
+    # time.sleep(10)
+    currently_trading()
+    # time.sleep(10)
+    # stop_trading_bot()
+    hour = load_recent_logs()
+    
+    # analyze_logs("explain", all_logs)
+    analyze_logs("summarize", hour)
+    adjectives = ["read", "explain", "summarize"]
+    
+
     while True:
         voice_command = recognize_voice()
         adjectives = ["read", "explain", "summarize"]
@@ -351,33 +370,55 @@ def main():
             speak_with_polly(start)
             speak_with_polly(get_prompts())
             voice_command = recognize_voice()
-            if any(adj in voice_command for adj in adjectives) and "logs" in voice_command:
-                picked_date = get_date_range('today')
-                logs = load_logs(picked_date)
+            if any(adj in voice_command for adj in adjectives) and "today" in voice_command:
+                  all_logs = load_logs_for_analysis("today")
+                  analyze_logs("summarize", all_logs)
 
-                if logs != "No logs found.":  # Ensure we're checking the content of logs
-                    if "read" in voice_command:
-                        speak_with_polly("Reading log content.")
-                    elif "explain" in voice_command:
-                        speak_with_polly("Explaining log content.")
-                    elif "summarize" in voice_command:
-                        speak_with_polly("Summarizing log content.")
-                    for adj in adjectives:
-                        if adj in voice_command:
-                            gpt_logs(adj, logs)  # Pass the adjective as the mode to process the logs
-                            speak_with_polly()
+            elif any(adj in voice_command for adj in adjectives) and "yesterday" in voice_command:
+                  all_logs = load_logs_for_analysis("yesterday")
+                  analyze_logs("summarize", all_logs)
 
-                else:
-                    speak_with_polly("Log file not found.")
+            elif any(adj in voice_command for adj in adjectives) and "week" in voice_command:
+                  all_logs = load_logs_for_analysis("week")
+                  analyze_logs("summarize", all_logs)
+
+            elif "are we trading" in voice_command:
+                  currently_trading()
             
-            elif "today" in voice_command and "logs" in voice_command:
-                get_date_range("today")
+            elif "start trade" in voice_command:
+                  mode = ""
+                  group = ""
+                  groups_available = ["biopharmaceutical", "upcoming-earnings", "most-popular-under-25", "technology"]
+                  modes_available = ["granular", "non-granular"]
+                  speak_with_polly("Please specify the mode and group")
+                  voice_command = recognize_voice()  
+                  while not any(mode in voice_command for mode in modes_available):
+                    speak_with_polly("Please specify the mode, granular or non-granular. skip or next to set the mode")
+                    voice_command = recognize_voice()
+                    if "skip" in voice_command or "next" in voice_command:
+                        break
+                  if any(mode in voice_command for mode in modes_available):
+                      mode = any(mode in voice_command for mode in modes_available)  
+                  speak_with_polly("and the group is the name of the group you want to trade with. they are ‘biopharmaceutical’, ‘upcoming-earnings’, ‘most-popular-under-25’, and ‘technology’.")
+                  voice_command = recognize_voice()
+                  while not any(group in voice_command for group in groups_available):
+                    speak_with_polly("Please specify the group biopharmaceutical, upcoming-earnings, most-popular-under-25, or technology. skip or next to abort")
+                    voice_command = recognize_voice()
+                    if "skip" in voice_command or "next" in voice_command:
+                        speak_with_polly("no appriopriate group was specified. bot can not be started")
+                        break
+                  if any(group in voice_command for group in groups_available):
+                      group = any(group in voice_command for group in groups_available)
+                  start_trading_bot(mode=mode, group=group)
 
+            elif "stop trade" in voice_command:
+                  stop_trading_bot()
             elif "exit" in voice_command:
                 speak_with_polly("Exiting the program.")
                 break
-            else:
-                speak_with_polly("Unrecognized command. Please say 'read logs', 'explain logs', or 'exit'.")
+
+
+
 
 
 if __name__ == "__main__":

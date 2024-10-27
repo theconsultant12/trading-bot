@@ -268,6 +268,7 @@ def checkTime():
         tradeDate = True
     return tradeTime and tradeDate
 
+
 def getWeightedAverage(stock):
     data = rh.stocks.get_stock_historicals(stock,interval="10minute", span="day")
         
@@ -403,7 +404,6 @@ def main():
         # combined = data + data_hour
         
         # # print(len(combined))
-
 
         # df = pd.DataFrame(combined)
         
