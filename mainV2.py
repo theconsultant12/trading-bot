@@ -291,7 +291,7 @@ def getWeightedAverage(stock):
     dayaverage = (avg_open + avg_close)/2 
     return(dayaverage)
 
-def monitorBuy(stock) -> int:
+def monitorBuy(stock, dry) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
     global DAYCOUNT 
@@ -323,7 +323,10 @@ def monitorBuy(stock) -> int:
             time.sleep(20)
             if count%49 == 0:
                 time.sleep(10)
-        buyprice = rh.orders.order_buy_market(stock, quantity)  
+        if dry:
+            costBuy = rh.stocks.get_latest_price(stock)[0]
+        else:
+            buyprice = rh.orders.order_buy_market(stock, quantity)  
         time.sleep(10)
         logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         count = 0
@@ -337,8 +340,12 @@ def monitorBuy(stock) -> int:
             time.sleep(2)
             if count%49 == 0:
                 time.sleep(10)
-        # sellprice = rh.orders.order_sell_market(stock, quantity)  
-        sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
+        # sellprice = rh.orders.order_sell_market(stock, quantity) 
+        if dry:
+            costSell = rh.stocks.get_latest_price(stock)[0]
+            return costSell - costBuy
+        else: 
+            sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
         logging.info(f"stock sold at {sellprice} after checking {count} times") 
         priceAfter = getCurrentBalance()
         diff = priceAfter - priceBefore
@@ -386,7 +393,8 @@ def main():
 
         # Add arguments
         parser.add_argument('-g', '--group', type=str, required=True, help='The group of stocks to trade')
-        parser.add_argument('-m', '--mode', type=str, required=True, help='The group of stocks to trade')
+        parser.add_argument('-m', '--mode', type=str, required=True, help='Granularity of the LSTM machine learning predictive algorithm')
+        parser.add_argument('-d', '--dry-run', type=str, required=True, help='Run the bot without using money')
 
         # Parse the arguments
         args = parser.parse_args()
