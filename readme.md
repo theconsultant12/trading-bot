@@ -44,18 +44,32 @@ This project implements an interactive voice assistant that can perform various 
 - Uses machine learning models (LSTM) to predict stock prices
 - Handles data preprocessing, model training, and prediction
 
-## Usage
+## Setup and Installation
 
-1. Start the main program by running the main function in interactive.py.
-2. Say "Jarvis" to activate the voice assistant.
-3. Follow the prompts to interact with the assistant.
-4. Use commands like "read logs," "explain logs," or "summarize logs" to analyze log files.
-5. The trading bot can be started separately by running mainV2.py.
-6. Stock predictions can be made using the functions in predict_stock.py.
-7. Say "exit" to end the program.
+1. Install Miniconda or Anaconda if you haven't already:
+   - Download from [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/products/distribution)
+
+2. Create the conda environment from the environment.yml file:
+
+```bash
+conda env create -f environment.yml
+```
+
+3. Activate the environment:
+
+```bash
+conda activate voice-assistant
+```
+
+4. Additional Setup Steps:
+   - Set up the Vosk model in the specified path
+   - Configure AWS credentials for Polly and Systems Manager
+   - Store the OpenAI API key in AWS Systems Manager Parameter Store
+   - Ensure you have sufficient historical stock data for training the prediction models
 
 ## Dependencies
 
+All dependencies are managed through the conda environment. Key packages include:
 - openai
 - pyttsx3
 - boto3
@@ -68,13 +82,11 @@ This project implements an interactive voice assistant that can perform various 
 - tensorflow
 - yfinance
 
-## Setup
+To update dependencies, modify the environment.yml file and run:
 
-1. Install the required dependencies.
-2. Set up the Vosk model in the specified path.
-3. Configure AWS credentials for Polly and Systems Manager.
-4. Store the OpenAI API key in AWS Systems Manager Parameter Store.
-5. Ensure you have sufficient historical stock data for training the prediction models.
+```bash
+conda env update -f environment.yml --prune
+```
 
 ## Note
 

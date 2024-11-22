@@ -18,6 +18,9 @@ import pandas as pd
 import atexit
 
 
+boto3.setup_default_session(region_name='us-east-1')
+
+
 DAYCOUNT = 0
 DAILYAPILIMIT = 19000
 

@@ -3,9 +3,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import logging
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras import layers
+from keras.models import Sequential
+from keras.optimizers import Adam
+from keras import layers
 import robin_stocks.robinhood as rh
 import webbrowser
 import os

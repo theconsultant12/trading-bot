@@ -7,9 +7,9 @@ from datetime import timedelta
 from matplotlib import pyplot as plt
 import numpy as np
 import logging
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras import layers
+from keras.models import Sequential
+from keras.optimizers import Adam
+from keras import layers
 
 def download_csv(stock, days=100):
     logging.info(f"Downloading CSV data for {stock}")

@@ -1,0 +1,19 @@
+
+name: bot-env
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - tensorflow
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - pip
+  - pip:
+    - numpy
+    - pandas
+    - matplotlib
+    - boto3
+    - robin_stocks
