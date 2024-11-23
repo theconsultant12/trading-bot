@@ -332,19 +332,26 @@ def speak_with_polly(text, voice_id="Joanna", output_format="mp3"):
 
 def recognize_voice():
     p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=8000)
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
     stream.start_stream()
     
     print("Listening for voice commands...")
+    recognized_text = ""
+    
+    start_time = time.time()  # Track time to manage response delay
     
     while True:
-        data = stream.read(8192, exception_on_overflow=False)
+        data = stream.read(2048, exception_on_overflow=False)
         if recognizer.AcceptWaveform(data):
             result = recognizer.Result()
-            text = json.loads(result)["text"]
-            if text:
-                print(f"Recognized command: {text}")
-                return text.lower()
+            recognized_text = json.loads(result)["text"]
+            if recognized_text:
+                print(f"Recognized command: {recognized_text}")
+                return recognized_text.lower()
+       
+            
+            
+
 
 
 # Main function that responds to commands
@@ -352,13 +359,13 @@ def main():
 
     #start_trading_bot("upcoming-earnings", "biopharmaceutical")
     # time.sleep(10)
-    currently_trading()
-    # time.sleep(10)
-    # stop_trading_bot()
-    hour = load_recent_logs()
+    # currently_trading()
+    # # time.sleep(10)
+    # # stop_trading_bot()
+    # hour = load_recent_logs()
     
-    # analyze_logs("explain", all_logs)
-    analyze_logs("summarize", hour)
+    # # analyze_logs("explain", all_logs)
+    # analyze_logs("summarize", hour)
     adjectives = ["read", "explain", "summarize"]
     
 
@@ -385,37 +392,57 @@ def main():
             elif "are we trading" in voice_command:
                   currently_trading()
             
-            elif "start trade" in voice_command:
-                  mode = ""
-                  group = ""
-                  groups_available = ["biopharmaceutical", "upcoming-earnings", "most-popular-under-25", "technology"]
-                  modes_available = ["granular", "non-granular"]
-                  speak_with_polly("Please specify the mode and group")
-                  voice_command = recognize_voice()  
-                  while not any(mode in voice_command for mode in modes_available):
-                    speak_with_polly("Please specify the mode, granular or non-granular. skip or next to set the mode")
+            elif "start" in voice_command:
+                mode = ""
+                group = ""
+                groups_available = ["biopharmaceutical", "upcoming-earnings", "most-popular-under-25", "technology"]
+                modes_available = ["granular", "non-granular"]
+                
+                speak_with_polly("Please specify the mode as granular or non-granular.")
+                voice_command = recognize_voice()
+                
+                while not any(m in voice_command for m in modes_available):
+                    speak_with_polly("Specify the mode as granular or non-granular. Say skip or next to abort.")
                     voice_command = recognize_voice()
                     if "skip" in voice_command or "next" in voice_command:
+                        speak_with_polly("Mode selection aborted.")
                         break
-                  if any(mode in voice_command for mode in modes_available):
-                      mode = any(mode in voice_command for mode in modes_available)  
-                  speak_with_polly("and the group is the name of the group you want to trade with. they are ‘biopharmaceutical’, ‘upcoming-earnings’, ‘most-popular-under-25’, and ‘technology’.")
-                  voice_command = recognize_voice()
-                  while not any(group in voice_command for group in groups_available):
-                    speak_with_polly("Please specify the group biopharmaceutical, upcoming-earnings, most-popular-under-25, or technology. skip or next to abort")
-                    voice_command = recognize_voice()
-                    if "skip" in voice_command or "next" in voice_command:
-                        speak_with_polly("no appriopriate group was specified. bot can not be started")
-                        break
-                  if any(group in voice_command for group in groups_available):
-                      group = any(group in voice_command for group in groups_available)
-                  start_trading_bot(mode=mode, group=group)
+                else:
+                    mode = next((m for m in modes_available if m in voice_command), "")
 
-            elif "stop trade" in voice_command:
+                if mode:
+                    speak_with_polly("Now, specify the group. Options are biopharmaceutical, upcoming-earnings, most-popular-under-25, or technology.")
+                    voice_command = recognize_voice()
+                    
+                    while not any(g in voice_command for g in groups_available):
+                        speak_with_polly("Specify the group. Say skip or next to abort.")
+                        voice_command = recognize_voice()
+                        if "skip" in voice_command or "next" in voice_command:
+                            speak_with_polly("Group selection aborted.")
+                            break
+                    else:
+                        group = next((g for g in groups_available if g in voice_command), "")
+                
+                if mode and group:
+                    start_trading_bot(mode=mode, group=group)
+                else:
+                    speak_with_polly("Trading bot was not started due to missing mode or group.")
+
+            elif "stop" in voice_command:
                   stop_trading_bot()
             elif "exit" in voice_command:
                 speak_with_polly("Exiting the program.")
                 break
+
+            elif "kill" in voice_command:
+                try:
+                    speak_with_polly("Opening a terminal to show the command to kill the trading bot")
+                    command = "ps aux | grep '[p]ython.*main.py' | awk '{print $2}'"
+                    speak_with_polly("To kill the trading bot, copy this command and paste it in your terminal:")
+                    speak_with_polly(command)
+                    speak_with_polly("Then use: kill -9 followed by the process ID shown")
+                except Exception as e:
+                    speak_with_polly(f"Error providing kill command: {str(e)}")
 
 
 
