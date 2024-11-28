@@ -4,7 +4,7 @@ from multiprocessing import Pool
 import importlib.util
 import sys
 from multiprocessing import Pool
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import logging
 import smtplib
@@ -16,6 +16,7 @@ from predict_stock import run_lstm
 from predict_stock_granular import run_lstm_granular
 import pandas as pd
 import atexit
+import signal
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -77,36 +78,6 @@ def send_message(phone_number, carrier, message):
     except Exception as e:
         logging.error(f"Failed to send message: {str(e)}")
 
-
-def send_sns_message(topic_arn, message):
-    try:
-        # Initialize a session using the AWS SDK for Python (Boto3)
-        session = boto3.Session(region_name='us-east-1')  # Specify the region here
-
-        # Create an SNS client
-        sns_client = session.client('sns')
-
-        try:
-            # Send a message to the specified SNS topic
-            response = sns_client.publish(
-                TopicArn=topic_arn,
-                Message=message
-            )
-
-            # Print the MessageId of the published message
-            logging.info(f"Message published with MessageId: {response['MessageId']}")
-            return response['MessageId']
-
-        except Exception as e:
-            print(f"Error publishing message: {str(e)}")
-            return None
-    except Exception as e:
-        logging.error(f"Failed to send SNS message: {str(e)}")
-
-
-# Example usage:
-topic_arn = 'arn:aws:sns:us-east-1:123456789012:MyTopic'  # Replace with your topic ARN
-message = 'Hello from Boto3!'  
 
 
 def login(time, username, password):
@@ -258,18 +229,6 @@ def getAllTrades(group) -> list:
 
     return stockList
 
-def checkTime():
-    """look through the time and compare to 9:30ET to 3:30ET return true if the time is within this window"""
-    tradeTime = False
-    tradeDate = False
-    now = datetime.now()
-    startTrade = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    endTrade = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    if now > startTrade and now < endTrade:
-        tradeTime = True
-    if datetime.today().weekday() in range(6):
-        tradeDate = True
-    return tradeTime and tradeDate
 
 
 def getWeightedAverage(stock):
@@ -294,30 +253,45 @@ def getWeightedAverage(stock):
     dayaverage = (avg_open + avg_close)/2 
     return(dayaverage)
 
-def monitorBuy(stock, dry) -> int:
+def wait_until_market_open():
+    """Wait until the market opens at 9:30 AM ET on weekdays"""
+    while True:
+        now = datetime.now()
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        
+        # Check if it's a weekday (Monday = 0 through Friday = 4)
+        is_weekday = now.weekday() < 5
+        
+        if not is_weekday:
+            next_day = now + timedelta(days=1)
+            next_day = next_day.replace(hour=9, minute=30, second=0, microsecond=0)
+            wait_seconds = (next_day - now).total_seconds()
+            time.sleep(3600)  # Sleep for an hour before checking again
+            continue
+            
+        if now >= market_open and is_weekday:
+            logging.info("Market is open, starting trading operations")
+            break
+        else:
+            wait_seconds = (market_open - now).total_seconds()
+            # Sleep for 60 seconds before checking again
+            time.sleep(600)
+
+
+def monitorBuy(stock, dry, user_id) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
     global DAYCOUNT 
     try:
 
-
-        # this is the old method and we have found that it is not consistent
-        # for i in range(10):
-        #     response = rh.stocks.get_latest_price(stock)
-        #     DAYCOUNT += 1
-            
-        #     prices.append(float(response[0]))
-            
-        #     time.sleep(2)
-        # average = sum(prices) / len(prices)
         average = getWeightedAverage(stock)
         # we are trying to spend a reasonable amount per stock buy
         logging.info(average)
         quantity = int(500/average)
         count = 0
-        priceBefore = getCurrentBalance()
+    
         while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
-            if not checkTime():
+            if not wait_until_market_open():
                 logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
                 time.sleep(3600)
             logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(stock)[0]}")
@@ -328,13 +302,15 @@ def monitorBuy(stock, dry) -> int:
                 time.sleep(10)
         if dry:
             costBuy = rh.stocks.get_latest_price(stock)[0]
+            record_transaction(user_id, stock, 'buy', costBuy * quantity)
         else:
             buyprice = rh.orders.order_buy_market(stock, quantity)  
+            record_transaction(user_id, stock, 'buy', buyprice * quantity)
         time.sleep(10)
         logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         count = 0
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
-            if not checkTime():
+            if not wait_until_market_open():
                 logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
                 time.sleep(3600)
             logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
@@ -346,18 +322,22 @@ def monitorBuy(stock, dry) -> int:
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
         if dry:
             costSell = rh.stocks.get_latest_price(stock)[0]
+            
+            record_transaction(user_id, stock, 'sell', costSell * quantity)
             return costSell - costBuy
         else: 
             sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
+            record_transaction(user_id, stock, 'sell', sellprice * quantity)
         logging.info(f"stock sold at {sellprice} after checking {count} times") 
-        priceAfter = getCurrentBalance()
-        diff = priceAfter - priceBefore
+       
+        diff = (sellprice * quantity) - (buyprice * quantity)
         logging.info(f'we made {diff} on this sale')
     except Exception as e:
         logging.error(f"Error in monitorBuy: {str(e)}")
         diff = 0
     return diff
 
+#get total portfolio data
 
 def getCurrentBalance():
     global DAYCOUNT 
@@ -368,39 +348,155 @@ def getCurrentBalance():
         logging.error(f"Error in getCurrentBalance: {str(e)}")
         return 0.0
 
-
-def append_items_to_csv(items, filename):
+def record_transaction(user_id, stock, type, cost):
     try:
-        with open(filename, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerows(items)  # Append the data
-        logging.info(f"Data appended to {filename} successfully.")
+        # Initialize DynamoDB client
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('bot-state-db')  # Replace with your table name
+    
+            
+            # Create composite key with user_id and date
+        composite_key = f"{user_id}#{current_date}"
+            
+            # Create item for DynamoDB
+        db_item = {
+            'CompositeKey': composite_key,  # Partition key: userId#date
+            'UserId': user_id,
+            'Date': current_date,
+            'StockID': stock,
+            'TransactionType': type,
+            'Cost': cost,
+            'Timestamp': datetime.now().isoformat()
+        }
+        
+        # Put item in DynamoDB
+        table.put_item(Item=db_item)
+            
+        logging.info(f"Data written to DynamoDB successfully for user {user_id}")
     except Exception as e:
-        logging.error(f"Failed to append items to CSV: {str(e)}")
+        logging.error(f"Failed to write to DynamoDB: {str(e)}")
+
+
+def closeDay():
+    """Calculate end of day statistics and find unsold stocks"""
+    try:
+        # Initialize DynamoDB client
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('bot-state-db')
+        
+        # Get today's transactions
+        response = table.scan(
+            FilterExpression='begins_with(CompositeKey, :date)',
+            ExpressionAttributeValues={
+                ':date': current_date
+            }
+        )
+        
+        # Track buys and sells
+        stock_tracker = {}
+        
+        # Process all transactions
+        for item in response.get('Items', []):
+            stock = item['StockID']
+            transaction_type = item['TransactionType']
+            cost = float(item['Cost'])
+            
+            if stock not in stock_tracker:
+                stock_tracker[stock] = {'buys': [], 'sells': []}
+                
+            if transaction_type == 'buy':
+                stock_tracker[stock]['buys'].append(cost)
+            elif transaction_type == 'sell':
+                stock_tracker[stock]['sells'].append(cost)
+        
+        # Find unsold stocks and calculate statistics
+        unsold_stocks = []
+        total_profit = 0
+        
+        for stock, transactions in stock_tracker.items():
+            buys_count = len(transactions['buys'])
+            sells_count = len(transactions['sells'])
+            
+            if buys_count > sells_count:
+                unsold_stocks.append({
+                    'symbol': stock,
+                    'unsold_quantity': buys_count - sells_count,
+                    'buy_cost': sum(transactions['buys'][sells_count:])
+                })
+            
+            # Calculate realized profit/loss
+            for buy, sell in zip(transactions['buys'][:sells_count], transactions['sells']):
+                total_profit += sell - buy
+        
+        # Log results
+        logging.info(f"End of day summary for {current_date}:")
+        logging.info(f"Total realized profit/loss: ${total_profit:.2f}")
+        
+        if unsold_stocks:
+            logging.info("Unsold positions:")
+            for position in unsold_stocks:
+                logging.info(f"Stock: {position['symbol']}, "
+                           f"Quantity: {position['unsold_quantity']}, "
+                           f"Cost Basis: ${position['buy_cost']:.2f}")
+        else:
+            logging.info("No unsold positions")
+            
+        return unsold_stocks
+        
+    except Exception as e:
+        logging.error(f"Error in closeDay: {str(e)}")
+        return [], 0
+
 
 def remove_pid_file(pid_file):
     if os.path.exists(pid_file):
         os.remove(pid_file)
 
 
-pid_file_path = '/tmp/trading-bot-process.pid'  # Path to store PID file
+def signal_handler(signum, frame):
+    """Handle termination signals"""
+    logging.info(f"Received signal {signum}. Performing cleanup...")
+    cleanup()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)  # Handle kill
+signal.signal(signal.SIGINT, signal_handler)   # Handle Ctrl+C
+signal.signal(signal.SIGKILL, signal_handler)
+
+
+def cleanup():
+    """Cleanup function to be called on exit"""
+    try:
+        closeDay()
+        remove_pid_file(pid_file_path)
+        logging.info("Cleanup completed successfully")
+    except Exception as e:
+        logging.error(f"Error during cleanup: {str(e)}")
+
+# Register cleanup functions
+pid_file_path = '/tmp/trading-bot-process.pid'
 create_pid_file(pid_file_path)
 logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
-atexit.register(remove_pid_file, pid_file_path)
+atexit.register(cleanup)
 
 def main():
     try:
+        # Update argument parser to include user_id
+        parser = argparse.ArgumentParser(description='Trading bot configuration')
+        parser.add_argument('-g', '--group', type=str, required=True, 
+                          help='The group of stocks to trade (biopharmaceutical, upcoming-earnings, most-popular-under-25, technology)')
+        parser.add_argument('-m', '--mode', type=str, required=True, 
+                          help='Granularity of the LSTM machine learning predictive algorithm')
+        parser.add_argument('-d', '--dry_run', type=str, required=True, 
+                          help='Run the bot without using money')
+        parser.add_argument('-u', '--user_id', type=str, required=True, 
+                          help='Unique identifier for the user')
 
-        # Create the parser
-        parser = argparse.ArgumentParser(description='Which of the sectors will you like to trade biopharmaceutical \nupcoming-earnings \nmost-popular-under-25 \ntechnology')
-
-        # Add arguments
-        parser.add_argument('-g', '--group', type=str, required=True, help='The group of stocks to trade')
-        parser.add_argument('-m', '--mode', type=str, required=True, help='Granularity of the LSTM machine learning predictive algorithm')
-        parser.add_argument('-d', '--dry-run', type=str, required=True, help='Run the bot without using money')
-
-        # Parse the arguments
         args = parser.parse_args()
+        logging.basicConfig(filename=f'{args.user_id}-{current_date}app.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
         u = get_parameter_value('/robinhood/username')
         p = get_parameter_value('/robinhood/password')
         login(24, u, p)
@@ -414,23 +510,42 @@ def main():
         # data_hour = data[-10:]
         # combined = data + data_hour
         
-        # # print(len(combined))
+#         # # print(len(combined))
+#         output_directory = "csvdata"
 
-        # df = pd.DataFrame(combined)
+# # Create the directory if it doesn't exist
+#         os.makedirs(output_directory, exist_ok=True)
+#         stockArray = []
+#         response = rh.markets.get_all_stocks_from_market_tag('technology')
+#         for stock in response[:500]:
+#             if float(stock.get("ask_price")) < 200:
+#                 stockArray.append({stock.get("symbol"): stock.get("ask_price")})
+#                 symbol = stock["symbol"]
+          
+#                 # Fetch historical data
+#                 data = rh.stocks.get_stock_historicals(symbol, interval="hour", span="3month")
+                
+#                 # Define CSV file name
+#                 file_name = os.path.join(output_directory, f"{symbol}.csv")
+                
+#                 # Write data to CSV
+#                 with open(file_name, mode='w', newline='') as csv_file:
+#                     fieldnames = ["begins_at", "open_price", "close_price", "high_price", "low_price", "volume"]
+#                     writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+#                     writer.writeheader()
+#                     for record in data:
+#                         writer.writerow({
+#                             "begins_at": record.get("begins_at"),
+#                             "open_price": record.get("open_price"),
+#                             "close_price": record.get("close_price"),
+#                             "high_price": record.get("high_price"),
+#                             "low_price": record.get("low_price"),
+#                             "volume": record.get("volume"),
+#                         })
+#                 print(f"Saved data for {symbol} to {file_name}")
         
-        # # Convert prices to numeric values
-        # df['open_price'] = pd.to_numeric(df['open_price'])
-        # df['close_price'] = pd.to_numeric(df['close_price'])
-        # df['high_price'] = pd.to_numeric(df['high_price'])
-        # df['low_price'] = pd.to_numeric(df['low_price'])
-
-        # # Calculate averages
-        # avg_open = df['open_price'].mean()
-        # avg_close = df['close_price'].mean()
-        # # avg_high = df['high_price'].mean()
-        # # avg_low = df['low_price'].mean()
-        # dayaverage = (avg_open + avg_close)/2 
-        # print(dayaverage)
+   
+       
 
         # exit()
         #####################################################
@@ -454,7 +569,7 @@ def main():
                     if latest_price < predicted_price:
                         logging.info(f"Predicted price of {item} is greater than latest price. We will trade this")
                         logging.info(f"trading {item}")
-                        diff = monitorBuy(item)
+                        diff = monitorBuy(item, args.dry_run, args.user_id)
                         estimatedProfitorLoss += diff
                         time.sleep(10)
                 else:
@@ -466,7 +581,7 @@ def main():
                     if latest_price < predicted_price:
                         logging.info(f"Predicted price of {item} is greater than latest price. we will trade this")
                         logging.info(f"trading {item}")
-                        diff = monitorBuy(item)
+                        diff = monitorBuy(item, args.dry_run, args.user_id)
                         estimatedProfitorLoss += diff
                         time.sleep(10)
             time.sleep(20)
@@ -488,11 +603,8 @@ def main():
         logging.info(current_date)
         actualProfit = endBalance - startBalance
         message = (f"Hello we have come to the end of the trading day we made an estimated  {word} of {actualProfit} because {reason}. \n total api calls made are {DAYCOUNT}")
-        items = [(current_date, startBalance, endBalance, actualProfit)]
-        csv_file = "monthlyreport.csv"
         time.sleep(30)
         send_message("6185810303", "tmobile", message)
-        append_items_to_csv(items, csv_file)
     except Exception as e:
         logging.error(f"Error in main: {str(e)}")
 

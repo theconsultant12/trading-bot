@@ -14,6 +14,7 @@ def preprocess_data(data):
     """
     Converts a list of dictionaries into a pandas DataFrame and processes it for LSTM.
     """
+    logging.info("processing data retrieved. setting index and adding close price")
     df = pd.DataFrame(data)
     df['Date'] = pd.to_datetime(df['begins_at'])
     df.set_index('Date', inplace=True)
@@ -79,7 +80,7 @@ def run_lstm_granular(item, price):
     dates_train, X_train, y_train = dates[:q_80], X[:q_80], y[:q_80]
     dates_val, X_val, y_val = dates[q_80:q_90], X[q_80:q_90], y[q_80:q_90]
     dates_test, X_test, y_test = dates[q_90:], X[q_90:], y[q_90:]
-
+    logging.info(f"Generating granular model of {item}")
     # Build and compile the model
     model = Sequential([
         layers.Input((3, 1)),

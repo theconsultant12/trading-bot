@@ -156,7 +156,7 @@ def analyze_logs(keyword, all_logs):
 
 
 
-def start_trading_bot(mode, group):
+def start_trading_bot(mode, group, dryrun, user_id):
     try:
         # Get the current directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -165,7 +165,7 @@ def start_trading_bot(mode, group):
         bot_script_path = os.path.join(current_dir, 'mainV2.py')
         
         # Start the trading bot as a subprocess using python3
-        process = subprocess.Popen(['python3', bot_script_path, '-m', mode, '-g', group])
+        process = subprocess.Popen(['python3', bot_script_path, '-m', mode, '-g', group, '-d', dryrun, '-u', user_id])
         
         speak_with_polly("bot has been started successfully.")
         return "Trading bot started with PID: " + str(process.pid)
@@ -211,61 +211,6 @@ def stop_trading_bot():
         error_message = f"Failed to stop trading bot. Error: {str(e)}"
         speak_with_polly(error_message)
         return error_message
-
-import re
-from datetime import datetime, timedelta
-import threading
-
-def monitor_unsold_stock(symbol, purchase_time, purchase_price):
-    def check_stock():
-        current_time = datetime.now()
-        log_file = f"{current_time.strftime('%Y-%m-%d')}app.log"
-        
-        try:
-            with open(log_file, 'r') as file:
-                logs = file.readlines()
-            
-            # Check if the stock has been sold
-            sold = any(f"Sold {symbol}" in line for line in logs)
-            
-            if not sold:
-                elapsed_time = current_time - purchase_time
-                
-                if elapsed_time > timedelta(hours=1):
-                    message = f"Alert: The stock {symbol} has not sold after one hour. "
-                    message += f"Purchase time: {purchase_time}, Purchase price: ${purchase_price:.2f}"
-                    
-                    speak_with_polly(message)
-                    print(message)
-                    
-                    # You might want to add logic here to decide whether to sell the stock
-                    # For example:
-                    # if current_price < purchase_price * 0.95:  # 5% loss
-                    #     sell_stock(symbol)
-                else:
-                    # If less than an hour has passed, schedule the next check
-                    remaining_time = timedelta(hours=1) - elapsed_time
-                    timer = threading.Timer(remaining_time.total_seconds(), check_stock)
-                    timer.start()
-        
-        except FileNotFoundError:
-            print(f"Log file {log_file} not found.")
-        except Exception as e:
-            print(f"An error occurred: {str(e)}")
-    
-    # Start the initial check
-    check_stock()
-
-def stock_bought_handler(symbol, price):
-    purchase_time = datetime.now()
-    monitor_unsold_stock(symbol, purchase_time, price)
-    message = f"Started monitoring {symbol} bought at ${price:.2f}"
-    speak_with_polly(message)
-    print(message)
-
-# Example usage:
-# When a stock is bought, call stock_bought_handler
-# stock_bought_handler("AAPL", 150.75)
 
 
 
@@ -350,7 +295,18 @@ def recognize_voice():
                 return recognized_text.lower()
        
             
-            
+user_list = [
+    'U001', 'U002', 'U003', 'U004', 'U005', 'U006', 'U007', 'U008', 'U009', 'U010',
+    'U011', 'U012', 'U013', 'U014', 'U015', 'U016', 'U017', 'U018', 'U019', 'U020',
+    'U021', 'U022', 'U023', 'U024', 'U025', 'U026', 'U027', 'U028', 'U029', 'U030',
+    'U031', 'U032', 'U033', 'U034', 'U035', 'U036', 'U037', 'U038', 'U039', 'U040',
+    'U041', 'U042', 'U043', 'U044', 'U045', 'U046', 'U047', 'U048', 'U049', 'U050',
+    'U051', 'U052', 'U053', 'U054', 'U055', 'U056', 'U057', 'U058', 'U059', 'U060',
+    'U061', 'U062', 'U063', 'U064', 'U065', 'U066', 'U067', 'U068', 'U069', 'U070',
+    'U071', 'U072', 'U073', 'U074', 'U075', 'U076', 'U077', 'U078', 'U079', 'U080',
+    'U081', 'U082', 'U083', 'U084', 'U085', 'U086', 'U087', 'U088', 'U089', 'U090',
+    'U091', 'U092', 'U093', 'U094', 'U095', 'U096', 'U097', 'U098', 'U099', 'U100'
+]
 
 
 
@@ -395,8 +351,11 @@ def main():
             elif "start" in voice_command:
                 mode = ""
                 group = ""
+                users = 1
+                dryrun = True
                 groups_available = ["biopharmaceutical", "upcoming-earnings", "most-popular-under-25", "technology"]
                 modes_available = ["granular", "non-granular"]
+
                 
                 speak_with_polly("Please specify the mode as granular or non-granular.")
                 voice_command = recognize_voice()
@@ -408,23 +367,36 @@ def main():
                         speak_with_polly("Mode selection aborted.")
                         break
                 else:
-                    mode = next((m for m in modes_available if m in voice_command), "")
+                    mode = next((m for m in modes_available if m in voice_command), "granular")
 
-                if mode:
-                    speak_with_polly("Now, specify the group. Options are biopharmaceutical, upcoming-earnings, most-popular-under-25, or technology.")
+                
+                speak_with_polly("Now, specify the group. Options are biopharmaceutical, upcoming-earnings, most-popular-under-25, or technology.")
+                voice_command = recognize_voice()
+                
+                while not any(g in voice_command for g in groups_available):
+                    speak_with_polly("Specify the group. Say skip or next to abort.")
                     voice_command = recognize_voice()
-                    
-                    while not any(g in voice_command for g in groups_available):
-                        speak_with_polly("Specify the group. Say skip or next to abort.")
-                        voice_command = recognize_voice()
-                        if "skip" in voice_command or "next" in voice_command:
-                            speak_with_polly("Group selection aborted.")
-                            break
-                    else:
-                        group = next((g for g in groups_available if g in voice_command), "")
+                    if "skip" in voice_command or "next" in voice_command:
+                        speak_with_polly("Group selection aborted.")
+                        break
+                else:
+                    group = next((g for g in groups_available if g in voice_command), "technology")
+                
+                speak_with_polly("how many bots do you need to be spun up. you can have between 1 to 100")
+                voice_command = recognize_voice()
+                
+                while not any(n in voice_command for n in range(100)):
+                    speak_with_polly("Specify the group. Say skip or next to abort.")
+                    voice_command = recognize_voice()
+                    if "skip" in voice_command or "next" in voice_command:
+                        speak_with_polly("Group selection aborted.")
+                        break
+                else:
+                    n = next((n for n in str(range(100)) if n in voice_command), 1)
                 
                 if mode and group:
-                    start_trading_bot(mode=mode, group=group)
+                    for user in user_list[:int(n)]:
+                        start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
                 else:
                     speak_with_polly("Trading bot was not started due to missing mode or group.")
 
