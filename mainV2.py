@@ -475,10 +475,7 @@ def cleanup():
         logging.error(f"Error during cleanup: {str(e)}")
 
 # Register cleanup functions
-pid_file_path = '/tmp/trading-bot-process.pid'
-create_pid_file(pid_file_path)
-logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
-atexit.register(cleanup)
+
 
 def main():
     try:
@@ -496,7 +493,11 @@ def main():
         args = parser.parse_args()
         logging.basicConfig(filename=f'{args.user_id}-{current_date}app.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
-
+        
+        pid_file_path = f'/tmp/{args.user_id}trading-bot-process.pid'
+        create_pid_file(pid_file_path)
+        logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
+        atexit.register(cleanup)
         u = get_parameter_value('/robinhood/username')
         p = get_parameter_value('/robinhood/password')
         login(24, u, p)

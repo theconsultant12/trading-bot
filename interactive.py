@@ -1,5 +1,3 @@
-
-import pyttsx3
 import os
 import boto3
 from datetime import datetime, timedelta
@@ -12,11 +10,24 @@ import subprocess
 import signal
 import time
 from openai import OpenAI
+import threading
 
 # Initialize the vosk recognizer with a model path
 MODEL_PATH = "/Users/macbook/workspace/rob-test/vosk-model-en-us-0.22-lgraph"  # e.g., "vosk-model-small-en-us-0.15"
 recognizer = vosk.KaldiRecognizer(vosk.Model(MODEL_PATH), 16000)
 
+user_list = [
+    'U001', 'U002', 'U003', 'U004', 'U005', 'U006', 'U007', 'U008', 'U009', 'U010',
+    'U011', 'U012', 'U013', 'U014', 'U015', 'U016', 'U017', 'U018', 'U019', 'U020',
+    'U021', 'U022', 'U023', 'U024', 'U025', 'U026', 'U027', 'U028', 'U029', 'U030',
+    'U031', 'U032', 'U033', 'U034', 'U035', 'U036', 'U037', 'U038', 'U039', 'U040',
+    'U041', 'U042', 'U043', 'U044', 'U045', 'U046', 'U047', 'U048', 'U049', 'U050',
+    'U051', 'U052', 'U053', 'U054', 'U055', 'U056', 'U057', 'U058', 'U059', 'U060',
+    'U061', 'U062', 'U063', 'U064', 'U065', 'U066', 'U067', 'U068', 'U069', 'U070',
+    'U071', 'U072', 'U073', 'U074', 'U075', 'U076', 'U077', 'U078', 'U079', 'U080',
+    'U081', 'U082', 'U083', 'U084', 'U085', 'U086', 'U087', 'U088', 'U089', 'U090',
+    'U091', 'U092', 'U093', 'U094', 'U095', 'U096', 'U097', 'U098', 'U099', 'U100'
+]
 
 def is_process_running(pid_file):
     try:
@@ -49,17 +60,13 @@ openai = OpenAI(api_key=get_parameter_value('/openai/api-key'))
 # Set your OpenAI API key
 
 
-# Initialize the text-to-speech engine
-engine = pyttsx3.init()
-
-
 # Read the logs from a file
 def load_logs(dayArray):
     all_logs = []
     path = os.path.abspath(os.getcwd())
     
     for day in dayArray:
-        log_file = os.path.join(path, f'{day}app.log')
+        log_file = os.path.join(path, f'*{day}app.log') 
         
         if os.path.exists(log_file):
             with open(log_file, 'r') as file:
@@ -70,33 +77,37 @@ def load_logs(dayArray):
     
     return "\n".join(all_logs) if all_logs else "No logs found."
 
-def load_recent_logs(hours=1):
+def load_recent_logs(hours=1, n=3):
     path = os.path.abspath(os.getcwd())
     current_time = datetime.now()
-    time_threshold = current_time - timedelta(hours=hours)
-    
-    # Get today's date for the log file name
-    today = current_time.strftime('%Y-%m-%d')
-    log_file = os.path.join(path, f'{today}app.log')
-    
-    if os.path.exists(log_file):
-        with open(log_file, 'r') as file:
-            logs = file.readlines()
+    time_threshold = current_time - timedelta(hours=hours) 
+    all_user_logs = []
+    for user in user_list[:int(n)]:
+        # Get today's date for the log file name
+        today = current_time.strftime('%Y-%m-%d')
+        log_file = os.path.join(path, f'*{user}*{today}app.log')
         
-        # Filter logs from the specified time period
-        recent_logs = []
-        for log in logs:
-            try:
-                log_time = datetime.strptime(log.split()[0] + ' ' + log.split()[1], '%Y-%m-%d %H:%M:%S,%f')
-                if log_time >= time_threshold:
-                    recent_logs.append(log.strip())
-            except (ValueError, IndexError):
-                # Skip lines that don't start with a timestamp
-                continue
-        
-        return "\n".join(recent_logs) if recent_logs else f"No logs found in the last {hours} hour(s)."
+        if os.path.exists(log_file):
+            with open(log_file, 'r') as file:
+                logs = file.readlines()
+            
+            # Filter logs from the specified time period
+            recent_logs = []
+            for log in logs:
+                try:
+                    log_time = datetime.strptime(log.split()[0] + ' ' + log.split()[1], '%Y-%m-%d %H:%M:%S,%f')
+                    if log_time >= time_threshold:
+                        recent_logs.append(f"[{user}] {log.strip()}")
+                except (ValueError, IndexError):
+                    continue
+            
+            if recent_logs:
+                all_user_logs.extend(recent_logs)
+    
+    if all_user_logs:
+        return "\n".join(all_user_logs)
     else:
-        speak_with_polly("Today's log file not found.")
+        speak_with_polly(f"No logs found in the last {hours} hour(s) for any user.")
         return None
 
 
@@ -174,39 +185,40 @@ def start_trading_bot(mode, group, dryrun, user_id):
         speak_with_polly(error_message)
         return error_message
 
-def stop_trading_bot():
+def stop_trading_bot(n):
     try:
-        pid_file_path = '/tmp/trading-bot-process.pid'
-        
-        # Check if the PID file exists
-        if not os.path.exists(pid_file_path):
-            speak_with_polly("Trading bot is not running.")
-            return "Trading bot is not running."
-        
-        # Read the PID from the file
-        with open(pid_file_path, 'r') as f:
-            pid = int(f.read().strip())
-        
-        # Try to terminate the process
-        os.kill(pid, signal.SIGTERM)
-        
-        # Wait for a short time to allow the process to terminate
-        time.sleep(2)
-        
-        # Check if the process has terminated
-        try:
-            os.kill(pid, 0)
-            # If we reach here, the process is still running
-            os.kill(pid, signal.SIGKILL)
-            speak_with_polly("Trading bot was forcefully terminated.")
-        except OSError:
-            # Process has terminated
-            speak_with_polly("Trading bot has been stopped successfully.")
-        
-        # Remove the PID file
-        os.remove(pid_file_path)
-        
-        return "Trading bot stopped."
+        for user in user_list[:int(n)]:
+            pid_file_path = f'/tmp/{user}trading-bot-process.pid'
+            
+            # Check if the PID file exists
+            if not os.path.exists(pid_file_path):
+                speak_with_polly(f"{user} bot is not running.")
+                return f"{user} bot is not running."
+            
+            # Read the PID from the file
+            with open(pid_file_path, 'r') as f:
+                pid = int(f.read().strip())
+            
+            # Try to terminate the process
+            os.kill(pid, signal.SIGTERM)
+            
+            # Wait for a short time to allow the process to terminate
+            time.sleep(2)
+            
+            # Check if the process has terminated
+            try:
+                os.kill(pid, 0)
+                # If we reach here, the process is still running
+                os.kill(pid, signal.SIGKILL)
+                speak_with_polly(f"{user} bot was forcefully terminated.")
+            except OSError:
+                # Process has terminated
+                speak_with_polly(f"{user} bot has been stopped successfully.")
+            
+            # Remove the PID file
+            os.remove(pid_file_path)
+            
+            return f"{user} bot stopped."
     except Exception as e:
         error_message = f"Failed to stop trading bot. Error: {str(e)}"
         speak_with_polly(error_message)
@@ -229,12 +241,19 @@ def gpt_logs(keyword, log_text):
     #return response.choices[0].message['content']
 
 
-def currently_trading():
-    pid_file_path = '/tmp/trading-bot-process.pid'
-    if is_process_running(pid_file_path):
-        speak_with_polly("The trading bot is running.")
+def currently_trading(n):
+    count = 0
+    for user in user_list[:int(n)]:
+        pid_file_path = f'/tmp/{user}trading-bot-process.pid'
+        if is_process_running(pid_file_path):
+            count += 1
+            
+    if count:
+        speak_with_polly(f"{count} trading bot is running.")
     else:
-        speak_with_polly("The trading bot is not running.")
+        speak_with_polly("no bots running")
+    return count
+          
 
 
 def get_time_of_day():
@@ -249,7 +268,7 @@ def get_time_of_day():
 
 
 def get_prompts():
-    return "Here are the list of prompts: 'read logs', 'are we trading', 'start trade', 'how did we do today'"
+    return "Here are the list of prompts: 'read logs', 'are we trading'"
 
 
 def speak_with_polly(text, voice_id="Joanna", output_format="mp3"):
@@ -295,36 +314,55 @@ def recognize_voice():
                 return recognized_text.lower()
        
             
-user_list = [
-    'U001', 'U002', 'U003', 'U004', 'U005', 'U006', 'U007', 'U008', 'U009', 'U010',
-    'U011', 'U012', 'U013', 'U014', 'U015', 'U016', 'U017', 'U018', 'U019', 'U020',
-    'U021', 'U022', 'U023', 'U024', 'U025', 'U026', 'U027', 'U028', 'U029', 'U030',
-    'U031', 'U032', 'U033', 'U034', 'U035', 'U036', 'U037', 'U038', 'U039', 'U040',
-    'U041', 'U042', 'U043', 'U044', 'U045', 'U046', 'U047', 'U048', 'U049', 'U050',
-    'U051', 'U052', 'U053', 'U054', 'U055', 'U056', 'U057', 'U058', 'U059', 'U060',
-    'U061', 'U062', 'U063', 'U064', 'U065', 'U066', 'U067', 'U068', 'U069', 'U070',
-    'U071', 'U072', 'U073', 'U074', 'U075', 'U076', 'U077', 'U078', 'U079', 'U080',
-    'U081', 'U082', 'U083', 'U084', 'U085', 'U086', 'U087', 'U088', 'U089', 'U090',
-    'U091', 'U092', 'U093', 'U094', 'U095', 'U096', 'U097', 'U098', 'U099', 'U100'
-]
 
+def is_trading_time():
+    current_time = datetime.now()
+    target_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+    return current_time.hour == 9 and current_time.minute == 30
 
+def auto_start_trading(n):
+    while True:
+        if is_trading_time():
+            # Default settings for auto-start
+            mode = "granular"
+            group = "technology"
+            dryrun = "True"  # Using first user from user_list
+            
+            speak_with_polly(f"It's 9 AM. Starting {n} trading bot with default settings.")
+            for user in user_list[:int(n)]:
+                start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
+            
+            # Wait for 60 seconds to avoid multiple starts
+            time.sleep(60)
+        time.sleep(30)  # Check every 30 seconds
+
+def monitor_logs_for_errors():
+    while True:
+        try:
+            currently_running = currently_trading(n)
+            if currently_running > 0:
+                logs = load_recent_logs(hours=0.17, n=currently_running)  # About 10 minutes
+                if logs and "error" in logs.lower():
+                    analysis = gpt_logs("analyze this error and suggest a solution", logs)
+                    speak_with_polly(f"Error detected in logs. Analysis: {analysis}")
+            time.sleep(600)  # Wait 10 minutes before next check
+        except Exception as e:
+            print(f"Error in monitor thread: {str(e)}")
+            time.sleep(600)  # Continue monitoring even if there's an error
 
 # Main function that responds to commands
 def main():
-
-    #start_trading_bot("upcoming-earnings", "biopharmaceutical")
-    # time.sleep(10)
-    # currently_trading()
-    # # time.sleep(10)
-    # # stop_trading_bot()
-    # hour = load_recent_logs()
+    # Start the error monitoring thread
+    error_monitor_thread = threading.Thread(target=monitor_logs_for_errors, daemon=True)
+    error_monitor_thread.start()
     
-    # # analyze_logs("explain", all_logs)
-    # analyze_logs("summarize", hour)
+    # Start auto-trading checker in a separate thread
+    auto_start_thread = threading.Thread(target=auto_start_trading, daemon=True)
+    auto_start_thread.start()
+    
     adjectives = ["read", "explain", "summarize"]
+    n = 3
     
-
     while True:
         voice_command = recognize_voice()
         adjectives = ["read", "explain", "summarize"]
@@ -345,63 +383,14 @@ def main():
                   all_logs = load_logs_for_analysis("week")
                   analyze_logs("summarize", all_logs)
 
-            elif "are we trading" in voice_command:
-                  currently_trading()
+            elif "trading" in voice_command:
+                  currently_running = currently_trading(n)
+                  if currently_running != 0:  
+                    logs = load_recent_logs(5, currently_trading(n))
+                    analyze_logs("is there an error here, if not give a 3 line summary", logs)
             
-            elif "start" in voice_command:
-                mode = ""
-                group = ""
-                users = 1
-                dryrun = True
-                groups_available = ["biopharmaceutical", "upcoming-earnings", "most-popular-under-25", "technology"]
-                modes_available = ["granular", "non-granular"]
-
-                
-                speak_with_polly("Please specify the mode as granular or non-granular.")
-                voice_command = recognize_voice()
-                
-                while not any(m in voice_command for m in modes_available):
-                    speak_with_polly("Specify the mode as granular or non-granular. Say skip or next to abort.")
-                    voice_command = recognize_voice()
-                    if "skip" in voice_command or "next" in voice_command:
-                        speak_with_polly("Mode selection aborted.")
-                        break
-                else:
-                    mode = next((m for m in modes_available if m in voice_command), "granular")
-
-                
-                speak_with_polly("Now, specify the group. Options are biopharmaceutical, upcoming-earnings, most-popular-under-25, or technology.")
-                voice_command = recognize_voice()
-                
-                while not any(g in voice_command for g in groups_available):
-                    speak_with_polly("Specify the group. Say skip or next to abort.")
-                    voice_command = recognize_voice()
-                    if "skip" in voice_command or "next" in voice_command:
-                        speak_with_polly("Group selection aborted.")
-                        break
-                else:
-                    group = next((g for g in groups_available if g in voice_command), "technology")
-                
-                speak_with_polly("how many bots do you need to be spun up. you can have between 1 to 100")
-                voice_command = recognize_voice()
-                
-                while not any(n in voice_command for n in range(100)):
-                    speak_with_polly("Specify the group. Say skip or next to abort.")
-                    voice_command = recognize_voice()
-                    if "skip" in voice_command or "next" in voice_command:
-                        speak_with_polly("Group selection aborted.")
-                        break
-                else:
-                    n = next((n for n in str(range(100)) if n in voice_command), 1)
-                
-                if mode and group:
-                    for user in user_list[:int(n)]:
-                        start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
-                else:
-                    speak_with_polly("Trading bot was not started due to missing mode or group.")
-
             elif "stop" in voice_command:
-                  stop_trading_bot()
+                  stop_trading_bot(n)
             elif "exit" in voice_command:
                 speak_with_polly("Exiting the program.")
                 break
