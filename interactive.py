@@ -16,6 +16,7 @@ import logging
 import smtplib
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
+import robin_stocks as rh
 
 # Initialize the vosk recognizer with a model path
 MODEL_PATH = "/Users/macbook/workspace/rob-test/vosk-model-en-us-0.22-lgraph"  # e.g., "vosk-model-small-en-us-0.15"
@@ -202,6 +203,7 @@ def analyze_logs(keyword, all_logs):
 def start_trading_bot(mode, group, dryrun, user_id):
     try:
         # Get the current directory
+        login_and_store_token()
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
         # Construct the path to mainV2.py
@@ -213,6 +215,7 @@ def start_trading_bot(mode, group, dryrun, user_id):
         return "Trading bot started with PID: " + str(process.pid)
     except Exception as e:
         error_message = f"Failed to start bot. Error: {str(e)}"
+        print(error_message)
         speak_with_polly(error_message)
         return error_message
 
@@ -350,9 +353,9 @@ def is_trading_time():
     target_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
     return current_time.hour == 9 and current_time.minute == 30
 
-def auto_start_trading(n, dryrun=True):
-    # while True:
-    #     if is_trading_time():
+def auto_start_trading(n, dryrun="True"):
+    while True:
+        if is_trading_time():
             mode = "granular"
             group = "technology"
             
@@ -364,8 +367,9 @@ def auto_start_trading(n, dryrun=True):
             time.sleep(60)
             message = f"Hello Olusola good day. Jarvis has started {n} bots. {getCurrentBalance()}"
             send_message("6185810303", "att", message)
-       # time.sleep(30)  
-auto_start_trading(n=2)
+        time.sleep(30)  
+
+
 
 def monitor_logs_for_errors(n):
     while True:
@@ -444,6 +448,43 @@ def get_today_reports(n):
         logging.error(error_msg)
         return None
 
+def login_and_store_token():
+    """Login to Robinhood and store the auth token for bots to use"""
+    try:
+        username = get_parameter_value('/robinhood/username')
+        password = get_parameter_value('/robinhood/password')
+        
+        response = rh.authentication.login(
+            username=username,
+            password=password,
+            expiresIn=3600*24,  # 24 hours
+            scope='internal',
+            by_sms=True,
+            store_session=True,
+            mfa_code=None
+        )
+        
+        if response and 'access_token' in response:
+            # Store token and timestamp in SSM
+            ssm_client = boto3.client('ssm')
+            token_data = {
+                'token': response['access_token'],
+                'timestamp': datetime.now().isoformat(),
+                'expires_in': 3600*24
+            }
+            
+            ssm_client.put_parameter(
+                Name='/robinhood/auth_token',
+                Value=json.dumps(token_data),
+                Type='SecureString',
+                Overwrite=True
+            )
+            speak_with_polly("Successfully logged in and stored authentication token")
+            return True
+    except Exception as e:
+        speak_with_polly(f"Failed to login: {str(e)}")
+        return False
+
 def main():
     n = 3
    
@@ -510,6 +551,9 @@ def main():
                     speak_with_polly("Then use: kill -9 followed by the process ID shown")
                 except Exception as e:
                     speak_with_polly(f"Error providing kill command: {str(e)}")
+
+            elif "login" in voice_command:
+                login_and_store_token()
 
             
 

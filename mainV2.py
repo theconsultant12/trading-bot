@@ -17,6 +17,7 @@ from predict_stock_granular import run_lstm_granular
 import pandas as pd
 import atexit
 import signal
+import json
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -60,26 +61,61 @@ def get_parameter_value(parameter_name):
         return None
 
 
-
-
-
-def login(time, username, password):
-    """This function logs you into the robinhood. time is in hours"""
-    global DAYCOUNT 
+def get_stored_token():
+    """Get existing auth token from SSM Parameter Store and check if it's valid"""
     try:
-        response = rh.authentication.login(username=username, 
-                                password=password, 
-                                expiresIn=3600*time, 
-                                scope='internal', 
-                                by_sms=True, 
-                                store_session=True, 
-                                mfa_code=None)
-        logging.info(f"login successfully.")
-        DAYCOUNT += 1
-        logging.info(f"signed in for {time} hours ")
+        ssm_client = boto3.client('ssm')
+        response = ssm_client.get_parameter(
+            Name='/robinhood/auth_token',
+            WithDecryption=True
+        )
+        
+        token_data = json.loads(response['Parameter']['Value'])
+        stored_time = datetime.fromisoformat(token_data['timestamp'])
+        expires_in = token_data['expires_in']
+        
+        # Check if token is still valid (with 1-hour buffer)
+        if datetime.now() - stored_time < timedelta(seconds=expires_in - 3600):
+            return token_data['token']
+        
+        return None
     except Exception as e:
-        logging.error(f"Failed to login: {str(e)}")
+        logging.error(f"Failed to get auth token: {str(e)}")
+        return None
 
+def login():
+    """Login using stored token or notify if reauth needed"""
+    try:
+        username = get_parameter_value('/robinhood/username')
+        password = get_parameter_value('/robinhood/password')
+        
+        # Try to get stored token
+        token = get_stored_token()
+        if token:
+            try:
+                # Try to use existing token
+                response = rh.authentication.login(
+                    username=username,
+                    password=password,
+                    expiresIn=3600*24,
+                    scope='internal',
+                    store_session=True,
+                    mfa_code=None,
+                    auth_token=token
+                )
+                logging.info("Login successful using stored token")
+                return True
+            except Exception as e:
+                logging.warning(f"Stored token invalid: {str(e)}")
+        
+        # If we get here, token was invalid or missing
+        logging.error("No valid token found. Please login via interactive.py first")
+        message = "Bot login failed - please login via interactive.py first"
+        return False
+        
+    except Exception as e:
+        logging.error(f"Login failed: {str(e)}")
+        return False
 
 def canWeTrade(minimumBalance, maximumBalance) -> bool:
     """ here we check how much is available in the trading account and we start trading if we are less than 1100 and higher than 500"""
