@@ -25,17 +25,16 @@ boto3.setup_default_session(region_name='us-east-1')
 DAYCOUNT = 0
 DAILYAPILIMIT = 19000
 
-now = datetime.now()
-current_date = now.strftime("%Y-%m-%d")
 
-logging.basicConfig(filename=f'{current_date}app.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
 CARRIERS = {
     "att": "@mms.att.net",
     "tmobile": "@tmomail.net",
     "verizon": "@vtext.com",
     "sprint": "@messaging.sprintpcs.com"
 }
+
+
+current_date = datetime.now().strftime("%Y-%m-%d")
 
 
 def create_pid_file(pid_file):
@@ -61,22 +60,6 @@ def get_parameter_value(parameter_name):
         return None
 
 
-def send_message(phone_number, carrier, message):
-    try:
-        recipient = phone_number + CARRIERS[carrier]
-        #use aws sns
-        logging.info(f"sending message to {phone_number}")
-        
-        u = get_parameter_value('/mail/username')
-        p = get_parameter_value('/mail/password')
-        auth = [u, p]
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-
-        server.login(auth[0], auth[1])
-        server.sendmail(auth[0], recipient, message)
-    except Exception as e:
-        logging.error(f"Failed to send message: {str(e)}")
 
 
 
@@ -462,14 +445,13 @@ def signal_handler(signum, frame):
 # Register signal handlers
 signal.signal(signal.SIGTERM, signal_handler)  # Handle kill
 signal.signal(signal.SIGINT, signal_handler)   # Handle Ctrl+C
-signal.signal(signal.SIGKILL, signal_handler)
+
 
 
 def cleanup():
     """Cleanup function to be called on exit"""
     try:
         closeDay()
-        remove_pid_file(pid_file_path)
         logging.info("Cleanup completed successfully")
     except Exception as e:
         logging.error(f"Error during cleanup: {str(e)}")
@@ -491,6 +473,10 @@ def main():
                           help='Unique identifier for the user')
 
         args = parser.parse_args()
+
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
+
         logging.basicConfig(filename=f'{args.user_id}-{current_date}app.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
         
@@ -553,8 +539,8 @@ def main():
         ## TEST SUITE
         #####################################################
         #write sms post message
-        message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
-        send_message("6185810303", "att", message)
+        # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
+  
         
         while canWeTrade(500, 22000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
@@ -605,7 +591,6 @@ def main():
         actualProfit = endBalance - startBalance
         message = (f"Hello we have come to the end of the trading day we made an estimated  {word} of {actualProfit} because {reason}. \n total api calls made are {DAYCOUNT}")
         time.sleep(30)
-        send_message("6185810303", "tmobile", message)
     except Exception as e:
         logging.error(f"Error in main: {str(e)}")
 

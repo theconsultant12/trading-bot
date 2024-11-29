@@ -11,6 +11,11 @@ import signal
 import time
 from openai import OpenAI
 import threading
+from mainV2 import  getCurrentBalance
+import logging
+import smtplib
+from boto3.dynamodb.conditions import Key
+from decimal import Decimal
 
 # Initialize the vosk recognizer with a model path
 MODEL_PATH = "/Users/macbook/workspace/rob-test/vosk-model-en-us-0.22-lgraph"  # e.g., "vosk-model-small-en-us-0.15"
@@ -29,6 +34,32 @@ user_list = [
     'U091', 'U092', 'U093', 'U094', 'U095', 'U096', 'U097', 'U098', 'U099', 'U100'
 ]
 
+
+CARRIERS = {
+    "att": "@mms.att.net",
+    "tmobile": "@tmomail.net",
+    "verizon": "@vtext.com",
+    "sprint": "@messaging.sprintpcs.com"
+}
+
+def send_message(phone_number, carrier, message):
+    try:
+        recipient = phone_number + CARRIERS[carrier]
+        #use aws sns
+        logging.info(f"sending message to {phone_number}")
+        
+        u = get_parameter_value('/mail/username')
+        p = get_parameter_value('/mail/password')
+        auth = [u, p]
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+
+        server.login(auth[0], auth[1])
+        server.sendmail(auth[0], recipient, message)
+    except Exception as e:
+        logging.error(f"Failed to send message: {str(e)}")
+
+
 def is_process_running(pid_file):
     try:
         # Read the PID from the file
@@ -41,6 +72,7 @@ def is_process_running(pid_file):
     except (OSError, FileNotFoundError, ValueError):
         # Process is not running or PID file doesn't exist
         return False
+
 
 
 def get_parameter_value(parameter_name):
@@ -177,8 +209,7 @@ def start_trading_bot(mode, group, dryrun, user_id):
         
         # Start the trading bot as a subprocess using python3
         process = subprocess.Popen(['python3', bot_script_path, '-m', mode, '-g', group, '-d', dryrun, '-u', user_id])
-        
-        speak_with_polly("bot has been started successfully.")
+        speak_with_polly(f"{user_id}bot has been started successfully.")
         return "Trading bot started with PID: " + str(process.pid)
     except Exception as e:
         error_message = f"Failed to start bot. Error: {str(e)}"
@@ -267,8 +298,7 @@ def get_time_of_day():
         return "evening"
 
 
-def get_prompts():
-    return "Here are the list of prompts: 'read logs', 'are we trading'"
+
 
 
 def speak_with_polly(text, voice_id="Joanna", output_format="mp3"):
@@ -320,13 +350,11 @@ def is_trading_time():
     target_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
     return current_time.hour == 9 and current_time.minute == 30
 
-def auto_start_trading(n):
-    while True:
-        if is_trading_time():
-            # Default settings for auto-start
+def auto_start_trading(n, dryrun=True):
+    # while True:
+    #     if is_trading_time():
             mode = "granular"
             group = "technology"
-            dryrun = "True"  # Using first user from user_list
             
             speak_with_polly(f"It's 9 AM. Starting {n} trading bot with default settings.")
             for user in user_list[:int(n)]:
@@ -334,9 +362,12 @@ def auto_start_trading(n):
             
             # Wait for 60 seconds to avoid multiple starts
             time.sleep(60)
-        time.sleep(30)  # Check every 30 seconds
+            message = f"Hello Olusola good day. Jarvis has started {n} bots. {getCurrentBalance()}"
+            send_message("6185810303", "att", message)
+       # time.sleep(30)  
+auto_start_trading(n=2)
 
-def monitor_logs_for_errors():
+def monitor_logs_for_errors(n):
     while True:
         try:
             currently_running = currently_trading(n)
@@ -350,28 +381,100 @@ def monitor_logs_for_errors():
             print(f"Error in monitor thread: {str(e)}")
             time.sleep(600)  # Continue monitoring even if there's an error
 
-# Main function that responds to commands
+def is_closing_time():
+    current_time = datetime.now()
+    return current_time.hour == 15 and current_time.minute == 30
+
+def monitor_trading_hours(n):
+    while True:
+        if is_closing_time():
+            speak_with_polly(f"It's 3:30 PM. Stopping {n} trading bots.")
+            stop_trading_bot(n)
+            message = f"Hello Olusola, Jarvis has stopped {n} bots for the day."
+            send_message("6185810303", "att", message)
+            time.sleep(60)  # Wait to avoid multiple stops
+        time.sleep(30)  # Check every 30 seconds
+
+def get_today_reports(n):
+    """
+    Fetch today's trading reports from DynamoDB for specified number of users
+    Returns a formatted string of the reports
+    """
+    try:
+        # Initialize DynamoDB client
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('bot-state-db')  # Replace with your actual table name
+        
+        # Get today's date in the format used in your DynamoDB
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        all_reports = []
+        for user in user_list[:int(n)]:
+            response = table.query(
+                KeyConditionExpression=Key('user_id').eq(user) & Key('date').eq(today)
+            )
+            
+            if response['Items']:
+                # Convert Decimal to float for better readability
+                for item in response['Items']:
+                    for key, value in item.items():
+                        if isinstance(value, Decimal):
+                            item[key] = float(value)
+                    all_reports.append(item)
+        
+        if all_reports:
+            # Format the report for speech
+            summary = f"Found {len(all_reports)} reports for today. "
+            for report in all_reports:
+                summary += f"User {report['user_id']} "
+                if 'profit_loss' in report:
+                    summary += f"P&L: ${report['profit_loss']:.2f}. "
+                if 'trades_count' in report:
+                    summary += f"Trades: {report['trades_count']}. "
+            
+            speak_with_polly(summary)
+            return all_reports
+        else:
+            speak_with_polly("No trading reports found for today.")
+            return None
+            
+    except Exception as e:
+        error_msg = f"Error fetching reports: {str(e)}"
+        speak_with_polly(error_msg)
+        logging.error(error_msg)
+        return None
+
 def main():
-    # Start the error monitoring thread
-    error_monitor_thread = threading.Thread(target=monitor_logs_for_errors, daemon=True)
-    error_monitor_thread.start()
+    n = 3
+   
     
     # Start auto-trading checker in a separate thread
-    auto_start_thread = threading.Thread(target=auto_start_trading, daemon=True)
+    auto_start_thread = threading.Thread(target=auto_start_trading, args=(n,), daemon=True)
     auto_start_thread.start()
     
+    # Add the trading hours monitor thread
+    trading_hours_thread = threading.Thread(target=monitor_trading_hours, args=(n,), daemon=True)
+    trading_hours_thread.start()
+
+     # Start the error monitoring thread
+    error_monitor_thread = threading.Thread(target=monitor_logs_for_errors, args=(n,), daemon=True)
+    error_monitor_thread.start()
+    
     adjectives = ["read", "explain", "summarize"]
-    n = 3
+    
     
     while True:
         voice_command = recognize_voice()
         adjectives = ["read", "explain", "summarize"]
         if "jarvis" in voice_command:
-            start = f"Hey Sola, good {get_time_of_day()}. What can I do for you today?"
-            speak_with_polly(start)
-            speak_with_polly(get_prompts())
+            if currently_trading(n):
+                speak_with_polly(f"Hey Sola, good {get_time_of_day()}. {n} bots are running. What can I do for you today?")
+            else:
+                speak_with_polly(f"Hey Sola, good {get_time_of_day()}. no bots are running now. do you need anything else")
+
+            speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading'")
             voice_command = recognize_voice()
-            if any(adj in voice_command for adj in adjectives) and "today" in voice_command:
+            if any(adj in voice_command for adj in adjectives):
                   all_logs = load_logs_for_analysis("today")
                   analyze_logs("summarize", all_logs)
 
@@ -382,6 +485,9 @@ def main():
             elif any(adj in voice_command for adj in adjectives) and "week" in voice_command:
                   all_logs = load_logs_for_analysis("week")
                   analyze_logs("summarize", all_logs)
+            
+            elif "reports" in voice_command:
+                get_today_reports(n)
 
             elif "trading" in voice_command:
                   currently_running = currently_trading(n)
@@ -404,6 +510,8 @@ def main():
                     speak_with_polly("Then use: kill -9 followed by the process ID shown")
                 except Exception as e:
                     speak_with_polly(f"Error providing kill command: {str(e)}")
+
+            
 
 
 
