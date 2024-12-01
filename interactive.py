@@ -19,7 +19,8 @@ from decimal import Decimal
 import robin_stocks as rh
 
 # Initialize the vosk recognizer with a model path
-MODEL_PATH = "/Users/macbook/workspace/rob-test/vosk-model-en-us-0.22-lgraph"  # e.g., "vosk-model-small-en-us-0.15"
+
+MODEL_PATH = os.path.join(os.path.abspath(os.getcwd()), "vosk-model-en-us-0.22-lgraph")  
 recognizer = vosk.KaldiRecognizer(vosk.Model(MODEL_PATH), 16000)
 
 user_list = [
