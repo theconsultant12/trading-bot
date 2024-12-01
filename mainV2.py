@@ -625,7 +625,7 @@ def main():
         current_date = now.strftime("%Y-%m-%d")
         logging.info(current_date)
         actualProfit = endBalance - startBalance
-        message = (f"Hello we have come to the end of the trading day we made an estimated  {word} of {actualProfit} because {reason}. \n total api calls made are {DAYCOUNT}")
+        
         time.sleep(30)
     except Exception as e:
         logging.error(f"Error in main: {str(e)}")

@@ -394,7 +394,7 @@ def monitor_trading_hours(n):
         if is_closing_time():
             speak_with_polly(f"It's 3:30 PM. Stopping {n} trading bots.")
             stop_trading_bot(n)
-            message = f"Hello Olusola, Jarvis has stopped {n} bots for the day."
+            message = f"Hello Olusola, Jarvis has stopped {n} bots for the day. here is his report{get_today_reports(n)}"
             send_message("6185810303", "att", message)
             time.sleep(60)  # Wait to avoid multiple stops
         time.sleep(30)  # Check every 30 seconds
