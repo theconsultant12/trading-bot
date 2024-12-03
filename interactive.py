@@ -18,9 +18,13 @@ from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 import robin_stocks as rh
 
-# Initialize the vosk recognizer with a model path
 
-MODEL_PATH = os.path.join(os.path.abspath(os.getcwd()), "vosk-model-en-us-0.22-lgraph")  
+now = datetime.now()
+current_date = now.strftime("%Y-%m-%d")
+logging.basicConfig(filename=f'{current_date}controller-logs.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+MODEL_PATH = os.path.join(os.path.abspath(os.getcwd()), "vosk-model-en-us-0.22")  
 recognizer = vosk.KaldiRecognizer(vosk.Model(MODEL_PATH), 16000)
 
 user_list = [
@@ -78,16 +82,28 @@ def is_process_running(pid_file):
 
 
 def get_parameter_value(parameter_name):
+    """
+    Retrieves the value of a parameter from AWS SSM Parameter Store.
+    
+    Args:
+        parameter_name (str): The name of the parameter to retrieve.
+    
+    Returns:
+        str: The value of the parameter, or None if not found or an error occurs.
+    """
     ssm_client = boto3.client('ssm')
+    logging.debug(f"Attempting to retrieve parameter: {parameter_name}")
 
     try:
         response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
+        value = response['Parameter']['Value']
+        logging.info(f"Successfully retrieved parameter '{parameter_name}'")
+        return value
     except ssm_client.exceptions.ParameterNotFound:
-        print(f"Parameter '{parameter_name}' not found.")
+        logging.warning(f"Parameter '{parameter_name}' not found.")
         return None
     except Exception as e:
-        print(f"Error occurred: {str(e)}")
+        logging.error(f"Error occurred while retrieving parameter '{parameter_name}': {str(e)}", exc_info=True)
         return None
 
 openai = OpenAI(api_key=get_parameter_value('/openai/api-key'))
@@ -98,7 +114,7 @@ openai = OpenAI(api_key=get_parameter_value('/openai/api-key'))
 def load_logs(dayArray):
     all_logs = []
     path = os.path.abspath(os.getcwd())
-    
+    logging.info(f"reading logs for {dayArray}")
     for day in dayArray:
         log_file = os.path.join(path, f'*{day}app.log') 
         
@@ -113,6 +129,7 @@ def load_logs(dayArray):
 
 def load_recent_logs(hours=1, n=3):
     path = os.path.abspath(os.getcwd())
+    logging.info(f"reading recent logs for the past {hours} on {n} bots")
     current_time = datetime.now()
     time_threshold = current_time - timedelta(hours=hours) 
     all_user_logs = []
@@ -146,36 +163,65 @@ def load_recent_logs(hours=1, n=3):
 
 
 def get_date_range(command):
+    """
+    Converts voice commands into a list of dates for log analysis.
+    
+    Args:
+        command (str): Voice command containing time reference ('today', 'yesterday', or 'week')
+    
+    Returns:
+        list: Array of date strings in 'YYYY-MM-DD' format
+    """
     dateArray = []   
     today = datetime.now()
+    logging.debug(f"Received command: {command}")
+
+    # Handle "yesterday" command
     if 'yesterday' in command:
         yesterday = today - timedelta(days=1)
-        if yesterday.weekday() >= 5:
+        logging.info(f"Processing 'yesterday': {yesterday.strftime('%Y-%m-%d')}")
+        
+        # Check if yesterday was a weekend
+        if yesterday.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
             last_weekday = today - timedelta(days=today.weekday() - 4)
+            logging.info(f"Yesterday was a weekend. Last weekday was: {last_weekday.strftime('%Y-%m-%d')}")
             speak_with_polly(f"The last weekday was: {last_weekday.strftime('%Y-%m-%d')}") 
-            dateArray.append(last_weekday.strftime('%Y-%m-%d'))  # Append formatted date
+            dateArray.append(last_weekday.strftime('%Y-%m-%d'))
             return dateArray 
         else:   
             dateArray.append(yesterday.strftime('%Y-%m-%d'))
-            return dateArray  # Return as an array
+            logging.info(f"Appending yesterday's date: {yesterday.strftime('%Y-%m-%d')}")
+            return dateArray
     
+    # Handle "today" command
     elif 'today' in command:
+        logging.info("Processing 'today' command")
+        
+        # Check if today is a weekend
         if today.weekday() >= 5:
             last_weekday = today - timedelta(days=today.weekday() - 4)
+            logging.info(f"Today is a weekend. Last weekday was: {last_weekday.strftime('%Y-%m-%d')}")
             speak_with_polly(f"The last weekday was: {last_weekday.strftime('%Y-%m-%d')}")
-            dateArray.append(last_weekday.strftime('%Y-%m-%d'))  # Append formatted date
+            dateArray.append(last_weekday.strftime('%Y-%m-%d'))
             return dateArray 
         else:
             dateArray.append(today.strftime('%Y-%m-%d'))
+            logging.info(f"Appending today's date: {today.strftime('%Y-%m-%d')}")
             return dateArray 
     
+    # Handle "week" command
     elif 'week' in command:
+        logging.info("Processing 'week' command")
+        # Get next 7 days, but only include weekdays
         for i in range(7):
             day = today + timedelta(days=i)
-            if day.weekday() < 5:  # Monday = 0, Tuesday = 1, ..., Friday = 4
+            if day.weekday() < 5:  # Only add Monday (0) through Friday (4)
                 dateArray.append(day.strftime('%Y-%m-%d'))
-        return dateArray  # Return the array of weekdays
+                logging.debug(f"Appending weekday: {day.strftime('%Y-%m-%d')}")
+        return dateArray
     
+    # Log if no valid command found
+    logging.warning("No valid date command found in the input.")
     return dateArray
 
 def load_logs_for_analysis(command):
@@ -191,6 +237,7 @@ def load_logs_for_analysis(command):
     return all_logs
 
 def analyze_logs(keyword, all_logs):
+    logging.info("sending logs to gpt for analyses")
 
     if all_logs:
         analysis = gpt_logs(keyword, all_logs)
@@ -267,7 +314,7 @@ def gpt_logs(keyword, log_text):
     response = openai.chat.completions.create(
         model="gpt-3.5-turbo",  # Updated to "gpt-4-turbo" since "gpt-4o-mini" might be incorrect or unavailable
         messages=[  # Messages should be a list of dicts
-            {"role": "user", "content": f"{keyword} the following logs in simple terms:\n\n{log_text}"}
+            {"role": "user", "content": f"{keyword} the following logs in simple terms:\n\n{log_text}. make the response concise"}
         ]
     )
     print(response.choices[0].message.content)
@@ -355,34 +402,60 @@ def is_trading_time():
     return current_time.hour == 9 and current_time.minute == 30
 
 def auto_start_trading(n, dryrun="True"):
+    logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
+    
     while True:
         if is_trading_time():
             mode = "granular"
             group = "technology"
             
+            logging.info(f"Trading time detected. Starting {n} bots with mode={mode} and group={group}")
             speak_with_polly(f"It's 9 AM. Starting {n} trading bot with default settings.")
+            
             for user in user_list[:int(n)]:
+                logging.debug(f"Starting bot for user {user}")
                 start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
             
-            # Wait for 60 seconds to avoid multiple starts
-            time.sleep(60)
+            logging.info(f"All {n} bots started successfully")
+            time.sleep(60)  # Wait for 60 seconds to avoid multiple starts
+            
             message = f"Hello Olusola good day. Jarvis has started {n} bots. {getCurrentBalance()}"
+            logging.debug(f"Sending start confirmation message: {message}")
             send_message("6185810303", "att", message)
-        time.sleep(30)  
-
-
+        else:
+            pass
+        
+        time.sleep(30)  # Check every 30 seconds
 
 def monitor_logs_for_errors(n):
+    logging.info(f"Starting log monitoring for {n} bots")
     while True:
         try:
+            logging.debug("Checking currently running bots")
             currently_running = currently_trading(n)
+            
             if currently_running > 0:
+                logging.info(f"Found {currently_running} active bots, checking their logs")
                 logs = load_recent_logs(hours=0.17, n=currently_running)  # About 10 minutes
-                if logs and "error" in logs.lower():
-                    analysis = gpt_logs("analyze this error and suggest a solution", logs)
-                    speak_with_polly(f"Error detected in logs. Analysis: {analysis}")
+                
+                if logs:
+                    if "error" in logs.lower():
+                        logging.warning("Errors detected in recent logs, sending for analysis")
+                        analysis = gpt_logs("analyze this error and suggest a solution", logs)
+                        logging.info(f"GPT Analysis: {analysis}")
+                        speak_with_polly(f"Error detected in logs. Analysis: {analysis}")
+                    else:
+                        logging.debug("No errors found in recent logs")
+                else:
+                    logging.debug("No logs found in the recent time window")
+                    
+            else:
+                pass
+                
             time.sleep(600)  # Wait 10 minutes before next check
+            
         except Exception as e:
+            logging.error(f"Error in monitor thread: {str(e)}", exc_info=True)
             print(f"Error in monitor thread: {str(e)}")
             time.sleep(600)  # Continue monitoring even if there's an error
 
@@ -391,13 +464,28 @@ def is_closing_time():
     return current_time.hour == 15 and current_time.minute == 30
 
 def monitor_trading_hours(n):
+    logging.info(f"Starting trading hours monitor for {n} bots")
+    
     while True:
+        current_time = datetime.now()
+        logging.debug(f"Checking trading hours at {current_time}")
+        
         if is_closing_time():
+            logging.info(f"Closing time detected ({current_time}). Initiating shutdown sequence for {n} bots")
             speak_with_polly(f"It's 3:30 PM. Stopping {n} trading bots.")
-            stop_trading_bot(n)
-            message = f"Hello Olusola, Jarvis has stopped {n} bots for the day. here is his report{get_today_reports(n)}"
-            send_message("6185810303", "att", message)
-            time.sleep(60)  # Wait to avoid multiple stops
+            
+            try:
+                stop_trading_bot(n)
+                logging.info("Successfully stopped trading bots")
+                
+                message = f"Hello Olusola, Jarvis has stopped {n} bots for the day. here is his report{get_today_reports(n)}"
+                send_message("6185810303", "att", message)
+                logging.info("Sent end-of-day notification message")
+                
+                time.sleep(60)  # Wait to avoid multiple stops
+            except Exception as e:
+                logging.error(f"Error during shutdown sequence: {str(e)}", exc_info=True)
+        
         time.sleep(30)  # Check every 30 seconds
 
 def get_today_reports(n):
@@ -405,30 +493,34 @@ def get_today_reports(n):
     Fetch today's trading reports from DynamoDB for specified number of users
     Returns a formatted string of the reports
     """
+    logging.info(f"Fetching today's trading reports for {n} users")
+    
     try:
         # Initialize DynamoDB client
         dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('bot-state-db')  # Replace with your actual table name
-        
-        # Get today's date in the format used in your DynamoDB
+        table = dynamodb.Table('bot-state-db')
         today = datetime.now().strftime('%Y-%m-%d')
+        logging.info(f"Querying DynamoDB for date: {today}")
         
         all_reports = []
         for user in user_list[:int(n)]:
+            logging.info(f"Fetching report for user: {user}")
             response = table.query(
                 KeyConditionExpression=Key('user_id').eq(user) & Key('date').eq(today)
             )
             
             if response['Items']:
-                # Convert Decimal to float for better readability
+                logging.info(f"Found {len(response['Items'])} records for user {user}")
                 for item in response['Items']:
                     for key, value in item.items():
                         if isinstance(value, Decimal):
                             item[key] = float(value)
                     all_reports.append(item)
+            else:
+                logging.warning(f"No records found for user {user}")
         
         if all_reports:
-            # Format the report for speech
+            logging.info(f"Successfully retrieved {len(all_reports)} total reports")
             summary = f"Found {len(all_reports)} reports for today. "
             for report in all_reports:
                 summary += f"User {report['user_id']} "
@@ -440,20 +532,25 @@ def get_today_reports(n):
             speak_with_polly(summary)
             return all_reports
         else:
+            logging.warning("No trading reports found for any users today")
             speak_with_polly("No trading reports found for today.")
             return None
             
     except Exception as e:
         error_msg = f"Error fetching reports: {str(e)}"
+        logging.error(error_msg, exc_info=True)
         speak_with_polly(error_msg)
-        logging.error(error_msg)
         return None
 
 def login_and_store_token():
     """Login to Robinhood and store the auth token for bots to use"""
+    logging.info("Starting Robinhood login process")
+    
     try:
         username = get_parameter_value('/robinhood/username')
         password = get_parameter_value('/robinhood/password')
+        
+        logging.info("Retrieved credentials from parameter store")
         
         response = rh.authentication.login(
             username=username,
@@ -465,6 +562,8 @@ def login_and_store_token():
             mfa_code=None
         )
         
+        logging.info("Login attempt completed")
+        
         if response and 'access_token' in response:
             # Store token and timestamp in SSM
             ssm_client = boto3.client('ssm')
@@ -474,15 +573,21 @@ def login_and_store_token():
                 'expires_in': 3600*24
             }
             
+            logging.info("Storing authentication token in SSM")
+            
             ssm_client.put_parameter(
                 Name='/robinhood/auth_token',
                 Value=json.dumps(token_data),
                 Type='SecureString',
                 Overwrite=True
             )
+            
+            logging.info("Successfully stored authentication token in SSM")
             speak_with_polly("Successfully logged in and stored authentication token")
             return True
+            
     except Exception as e:
+        logging.error(f"Login failed with error: {str(e)}", exc_info=True)
         speak_with_polly(f"Failed to login: {str(e)}")
         return False
 
