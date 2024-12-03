@@ -592,7 +592,7 @@ def login_and_store_token():
         return False
 
 def main():
-    n = 3
+    n = 1
    
     
     # Start auto-trading checker in a separate thread
@@ -608,58 +608,72 @@ def main():
     error_monitor_thread.start()
     
     adjectives = ["read", "explain", "summarize"]
-    
-    
-    while True:
-        voice_command = recognize_voice()
-        adjectives = ["read", "explain", "summarize"]
-        if "jarvis" in voice_command:
-            if currently_trading(n):
-                speak_with_polly(f"Hey Sola, good {get_time_of_day()}. {n} bots are running. What can I do for you today?")
-            else:
-                speak_with_polly(f"Hey Sola, good {get_time_of_day()}. no bots are running now. do you need anything else")
+    ##########################################################
+    ## TEST SUITE
+    ##########################################################
 
-            speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading'")
-            voice_command = recognize_voice()
-            if any(adj in voice_command for adj in adjectives):
-                  all_logs = load_logs_for_analysis("today")
-                  analyze_logs("summarize", all_logs)
-
-            elif any(adj in voice_command for adj in adjectives) and "yesterday" in voice_command:
-                  all_logs = load_logs_for_analysis("yesterday")
-                  analyze_logs("summarize", all_logs)
-
-            elif any(adj in voice_command for adj in adjectives) and "week" in voice_command:
-                  all_logs = load_logs_for_analysis("week")
-                  analyze_logs("summarize", all_logs)
+    for user in user_list[:int(n)]:
+                logging.debug(f"Starting bot for user {user}")
+                start_trading_bot(mode="granular", group="Pharmaceutical", dryrun="True", user_id=user)
             
-            elif "reports" in voice_command:
-                get_today_reports(n)
+    logging.info(f"All {n} bots started successfully")
+    time.sleep(60)  # W
+    ##########################################################
+    # END TEST SUITE
+    ##########################################################
+    # while True:
+    #     voice_command = recognize_voice()
+    #     adjectives = ["read", "explain", "summarize"]
+    #     if "jarvis" in voice_command:
+    #         if currently_trading(n):
+    #             speak_with_polly(f"Hey Sola, good {get_time_of_day()}. {n} bots are running. What can I do for you today?")
+    #         else:
+    #             speak_with_polly(f"Hey Sola, good {get_time_of_day()}. no bots are running now. do you need anything else")
 
-            elif "trading" in voice_command:
-                  currently_running = currently_trading(n)
-                  if currently_running != 0:  
-                    logs = load_recent_logs(5, currently_trading(n))
-                    analyze_logs("is there an error here, if not give a 3 line summary", logs)
+    #         speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading'")
+    #         voice_command = recognize_voice()
+    #         if any(adj in voice_command for adj in adjectives):
+    #               all_logs = load_logs_for_analysis("today")
+    #               analyze_logs("summarize", all_logs)
+
+    #         elif any(adj in voice_command for adj in adjectives) and "yesterday" in voice_command:
+    #               all_logs = load_logs_for_analysis("yesterday")
+    #               analyze_logs("summarize", all_logs)
+
+    #         elif any(adj in voice_command for adj in adjectives) and "week" in voice_command:
+    #               all_logs = load_logs_for_analysis("week")
+    #               analyze_logs("summarize", all_logs)
             
-            elif "stop" in voice_command:
-                  stop_trading_bot(n)
-            elif "exit" in voice_command:
-                speak_with_polly("Exiting the program.")
-                break
+    #         elif "reports" in voice_command:
+    #             get_today_reports(n)
 
-            elif "kill" in voice_command:
-                try:
-                    speak_with_polly("Opening a terminal to show the command to kill the trading bot")
-                    command = "ps aux | grep '[p]ython.*main.py' | awk '{print $2}'"
-                    speak_with_polly("To kill the trading bot, copy this command and paste it in your terminal:")
-                    speak_with_polly(command)
-                    speak_with_polly("Then use: kill -9 followed by the process ID shown")
-                except Exception as e:
-                    speak_with_polly(f"Error providing kill command: {str(e)}")
+    #         elif "trading" in voice_command:
+    #               currently_running = currently_trading(n)
+    #               if currently_running != 0:  
+    #                 logs = load_recent_logs(5, currently_trading(n))
+    #                 analyze_logs("is there an error here, if not give a 3 line summary", logs)
+            
+    #         elif "stop" in voice_command:
+    #               stop_trading_bot(n)
+    #         elif "exit" in voice_command:
+    #             speak_with_polly("Exiting the program.")
+    #             break
+    #         elif "pass" in voice_command:
+    #             speak_with_polly("Exiting the program.")
+    #             pass
 
-            elif "login" in voice_command:
-                login_and_store_token()
+    #         elif "kill" in voice_command:
+    #             try:
+    #                 speak_with_polly("Opening a terminal to show the command to kill the trading bot")
+    #                 command = "ps aux | grep '[p]ython.*main.py' | awk '{print $2}'"
+    #                 speak_with_polly("To kill the trading bot, copy this command and paste it in your terminal:")
+    #                 speak_with_polly(command)
+    #                 speak_with_polly("Then use: kill -9 followed by the process ID shown")
+    #             except Exception as e:
+    #                 speak_with_polly(f"Error providing kill command: {str(e)}")
+
+    #         elif "login" in voice_command:
+    #             login_and_store_token()
 
             
 

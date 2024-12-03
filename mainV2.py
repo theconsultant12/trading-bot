@@ -522,7 +522,7 @@ def main():
         atexit.register(cleanup)
         u = get_parameter_value('/robinhood/username')
         p = get_parameter_value('/robinhood/password')
-        login(24, u, p)
+        login()
         startBalance = getCurrentBalance()
         estimatedProfitorLoss = 0
         #####################################################
