@@ -16,7 +16,7 @@ import logging
 import smtplib
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
-import robin_stocks as rh
+import robin_stocks.robinhood as rh
 
 
 now = datetime.now()
