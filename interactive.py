@@ -251,7 +251,6 @@ def analyze_logs(keyword, all_logs):
 def start_trading_bot(mode, group, dryrun, user_id):
     try:
         # Get the current directory
-        login_and_store_token()
         current_dir = os.path.dirname(os.path.abspath(__file__))
         
         # Construct the path to mainV2.py
@@ -542,54 +541,6 @@ def get_today_reports(n):
         speak_with_polly(error_msg)
         return None
 
-def login_and_store_token():
-    """Login to Robinhood and store the auth token for bots to use"""
-    logging.info("Starting Robinhood login process")
-    
-    try:
-        username = get_parameter_value('/robinhood/username')
-        password = get_parameter_value('/robinhood/password')
-        
-        logging.info("Retrieved credentials from parameter store")
-        
-        response = rh.authentication.login(
-            username=username,
-            password=password,
-            expiresIn=3600*24,  # 24 hours
-            scope='internal',
-            by_sms=True,
-            store_session=True,
-            mfa_code=None
-        )
-        
-        logging.info("Login attempt completed")
-        
-        if response and 'access_token' in response:
-            # Store token and timestamp in SSM
-            ssm_client = boto3.client('ssm')
-            token_data = {
-                'token': response['access_token'],
-                'timestamp': datetime.now().isoformat(),
-                'expires_in': 3600*24
-            }
-            
-            logging.info("Storing authentication token in SSM")
-            
-            ssm_client.put_parameter(
-                Name='/robinhood/auth_token',
-                Value=json.dumps(token_data),
-                Type='SecureString',
-                Overwrite=True
-            )
-            
-            logging.info("Successfully stored authentication token in SSM")
-            speak_with_polly("Successfully logged in and stored authentication token")
-            return True
-            
-    except Exception as e:
-        logging.error(f"Login failed with error: {str(e)}", exc_info=True)
-        speak_with_polly(f"Failed to login: {str(e)}")
-        return False
 
 def main():
     n = 1
@@ -672,8 +623,7 @@ def main():
     #             except Exception as e:
     #                 speak_with_polly(f"Error providing kill command: {str(e)}")
 
-    #         elif "login" in voice_command:
-    #             login_and_store_token()
+    #         
 
             
 

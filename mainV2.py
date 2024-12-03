@@ -88,30 +88,18 @@ def login():
     try:
         username = get_parameter_value('/robinhood/username')
         password = get_parameter_value('/robinhood/password')
-        
-        # Try to get stored token
-        token = get_stored_token()
-        if token:
-            try:
-                # Try to use existing token
-                response = rh.authentication.login(
-                    username=username,
-                    password=password,
-                    expiresIn=3600*24,
-                    scope='internal',
-                    store_session=True,
-                    mfa_code=None,
-                    auth_token=token
-                )
-                logging.info("Login successful using stored token")
-                return True
-            except Exception as e:
-                logging.warning(f"Stored token invalid: {str(e)}")
-        
-        # If we get here, token was invalid or missing
-        logging.error("No valid token found. Please login via interactive.py first")
-        message = "Bot login failed - please login via interactive.py first"
-        return False
+            # Try to use existing token
+        response = rh.authentication.login(
+            username=username,
+            password=password,
+            expiresIn=3600*24,
+            scope='internal',
+            store_session=True,
+            mfa_code=None,
+        )
+        logging.info("Login successful using stored token")
+        return True
+
         
     except Exception as e:
         logging.error(f"Login failed: {str(e)}")
