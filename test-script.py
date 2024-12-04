@@ -1,7 +1,7 @@
 from multiprocessing import Pool
 from datetime import datetime
 import time
-import robin_stocks.robinhood as rh
+import boto3
 
 current_dateTime = datetime.now()
 
@@ -28,7 +28,7 @@ print(checkTime())
 
 def f(x):
     return x*x
-rh.stocks.get_stock_historicals("NVDA")
+
 if __name__ == '__main__':
     # get the start time
     # st = time.time()
@@ -49,5 +49,23 @@ if __name__ == '__main__':
     # arrelapsed_time = et - st
     
     # print(f"time of thread = {elapsed_time} \ntime of for = {arrelapsed_time}")
-    print(checkTime())
-    rh.stocks.get_stock_historicals("NVDA")
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('bot-state-db')  # Replace with your table name
+
+        
+        # Create composite key with user_id and date
+    composite_key = f"utest#{current_date}"
+        
+        # Create item for DynamoDB
+    db_item = {
+        'key': composite_key,  # Partition key: userId#date
+        'UserId': "Utest01",
+        'Date': current_date,
+        'StockID': "nvda",
+        'TransactionType': "buy",
+        'Cost': 60,
+        'Timestamp': datetime.now().isoformat()
+    }
+    
+    # Put item in DynamoDB
+    table.put_item(Item=db_item)

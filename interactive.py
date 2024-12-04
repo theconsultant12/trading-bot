@@ -435,7 +435,7 @@ def monitor_logs_for_errors(n):
             
             if currently_running > 0:
                 logging.info(f"Found {currently_running} active bots, checking their logs")
-                logs = load_recent_logs(hours=0.17, n=currently_running)  # About 10 minutes
+                logs = load_recent_logs(hours=1, n=currently_running)  # About 10 minutes
                 
                 if logs:
                     if "error" in logs.lower():
@@ -486,6 +486,31 @@ def monitor_trading_hours(n):
                 logging.error(f"Error during shutdown sequence: {str(e)}", exc_info=True)
         
         time.sleep(30)  # Check every 30 seconds
+
+def cleanup():
+    logging.info("Cleaning up: stopping all trading bots and terminating threads.")
+    # Stop all trading bots
+    n = len(user_list)  # Assuming you want to stop all bots
+    stop_trading_bot(n)
+    
+    # Optionally, you can add logic to join threads if needed
+    # For example, if you have references to the threads, you can join them here
+    # auto_start_thread.join()
+    # trading_hours_thread.join()
+    # error_monitor_thread.join()
+
+    logging.info("Cleanup completed.")
+
+def signal_handler(signum, frame):
+    """Handle termination signals"""
+    logging.info(f"Received signal {signum}. Performing cleanup...")
+    cleanup()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)  # Handle kill
+signal.signal(signal.SIGINT, signal_handler) 
+
 
 def get_today_reports(n):
     """
@@ -546,7 +571,27 @@ def main():
     n = 1
    
     
-    # Start auto-trading checker in a separate thread
+   
+    ##########################################################
+    ## TEST SUITE
+    ##########################################################
+
+    for user in user_list[:int(n)]:
+                
+                logging.debug(f"Starting bot for user {user}")
+                start_trading_bot(mode="granular", group="biopharmaceutical", dryrun="True", user_id=user)
+    for user in user_list[int(n):2]:
+                
+        logging.debug(f"Starting bot for user {user}")
+        start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
+            
+    logging.info(f"All {n} bots started successfully")
+    time.sleep(60)  # W
+    ##########################################################
+    # END TEST SUITE
+    ##########################################################
+
+     # Start auto-trading checker in a separate thread
     auto_start_thread = threading.Thread(target=auto_start_trading, args=(n,), daemon=True)
     auto_start_thread.start()
     
@@ -559,19 +604,7 @@ def main():
     error_monitor_thread.start()
     
     adjectives = ["read", "explain", "summarize"]
-    ##########################################################
-    ## TEST SUITE
-    ##########################################################
 
-    for user in user_list[:int(n)]:
-                logging.debug(f"Starting bot for user {user}")
-                start_trading_bot(mode="granular", group="Pharmaceutical", dryrun="True", user_id=user)
-            
-    logging.info(f"All {n} bots started successfully")
-    time.sleep(60)  # W
-    ##########################################################
-    # END TEST SUITE
-    ##########################################################
     # while True:
     #     voice_command = recognize_voice()
     #     adjectives = ["read", "explain", "summarize"]

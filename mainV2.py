@@ -260,29 +260,7 @@ def getWeightedAverage(stock):
     dayaverage = (avg_open + avg_close)/2 
     return(dayaverage)
 
-def wait_until_market_open():
-    """Wait until the market opens at 9:30 AM ET on weekdays"""
-    while True:
-        now = datetime.now()
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        
-        # Check if it's a weekday (Monday = 0 through Friday = 4)
-        is_weekday = now.weekday() < 5
-        
-        if not is_weekday:
-            next_day = now + timedelta(days=1)
-            next_day = next_day.replace(hour=9, minute=30, second=0, microsecond=0)
-            wait_seconds = (next_day - now).total_seconds()
-            time.sleep(3600)  # Sleep for an hour before checking again
-            continue
-            
-        if now >= market_open and is_weekday:
-            logging.info("Market is open, starting trading operations")
-            break
-        else:
-            wait_seconds = (market_open - now).total_seconds()
-            # Sleep for 60 seconds before checking again
-            time.sleep(600)
+
 
 
 def monitorBuy(stock, dry, user_id) -> int:
@@ -296,31 +274,26 @@ def monitorBuy(stock, dry, user_id) -> int:
         logging.info(average)
         quantity = int(500/average)
         count = 0
-    
+        logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(stock)[0]}")
         while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
-            if not wait_until_market_open():
-                logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
-                time.sleep(3600)
-            logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(stock)[0]}")
             count += 1
             DAYCOUNT += 1
-            time.sleep(20)
+            time.sleep(2)
             if count%49 == 0:
                 time.sleep(10)
         if dry:
             costBuy = rh.stocks.get_latest_price(stock)[0]
             record_transaction(user_id, stock, 'buy', costBuy * quantity)
+            logging.info(f"{costBuy}stock bought at {costBuy}  after checking {count} times")
         else:
             buyprice = rh.orders.order_buy_market(stock, quantity)  
             record_transaction(user_id, stock, 'buy', buyprice * quantity)
+            logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         time.sleep(10)
-        logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
+        
         count = 0
+        logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
-            if not wait_until_market_open():
-                logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
-                time.sleep(3600)
-            logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
             count += 1
             DAYCOUNT += 1
             time.sleep(2)
@@ -329,13 +302,13 @@ def monitorBuy(stock, dry, user_id) -> int:
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
         if dry:
             costSell = rh.stocks.get_latest_price(stock)[0]
-            
+            logging.info(f"stock sold at {costSell} after checking {count} times")
             record_transaction(user_id, stock, 'sell', costSell * quantity)
             return costSell - costBuy
         else: 
             sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
             record_transaction(user_id, stock, 'sell', sellprice * quantity)
-        logging.info(f"stock sold at {sellprice} after checking {count} times") 
+            logging.info(f"stock sold at {sellprice} after checking {count} times") 
        
         diff = (sellprice * quantity) - (buyprice * quantity)
         logging.info(f'we made {diff} on this sale')
@@ -367,7 +340,7 @@ def record_transaction(user_id, stock, type, cost):
             
             # Create item for DynamoDB
         db_item = {
-            'CompositeKey': composite_key,  # Partition key: userId#date
+            'key': composite_key,  # Partition key: userId#date
             'UserId': user_id,
             'Date': current_date,
             'StockID': stock,
@@ -393,7 +366,7 @@ def closeDay():
         
         # Get today's transactions
         response = table.scan(
-            FilterExpression='begins_with(CompositeKey, :date)',
+            FilterExpression='begins_with(key, :date)',
             ExpressionAttributeValues={
                 ':date': current_date
             }
@@ -518,43 +491,7 @@ def main():
         #####################################################
         # data = rh.stocks.get_stock_historicals("ORCL",interval="10minute", span="day")
         
-        # data_hour = data[-10:]
-        # combined = data + data_hour
-        
-#         # # print(len(combined))
-#         output_directory = "csvdata"
-
-# # Create the directory if it doesn't exist
-#         os.makedirs(output_directory, exist_ok=True)
-#         stockArray = []
-#         response = rh.markets.get_all_stocks_from_market_tag('technology')
-#         for stock in response[:500]:
-#             if float(stock.get("ask_price")) < 200:
-#                 stockArray.append({stock.get("symbol"): stock.get("ask_price")})
-#                 symbol = stock["symbol"]
-          
-#                 # Fetch historical data
-#                 data = rh.stocks.get_stock_historicals(symbol, interval="hour", span="3month")
-                
-#                 # Define CSV file name
-#                 file_name = os.path.join(output_directory, f"{symbol}.csv")
-                
-#                 # Write data to CSV
-#                 with open(file_name, mode='w', newline='') as csv_file:
-#                     fieldnames = ["begins_at", "open_price", "close_price", "high_price", "low_price", "volume"]
-#                     writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-#                     writer.writeheader()
-#                     for record in data:
-#                         writer.writerow({
-#                             "begins_at": record.get("begins_at"),
-#                             "open_price": record.get("open_price"),
-#                             "close_price": record.get("close_price"),
-#                             "high_price": record.get("high_price"),
-#                             "low_price": record.get("low_price"),
-#                             "volume": record.get("volume"),
-#                         })
-#                 print(f"Saved data for {symbol} to {file_name}")
-        
+    
    
        
 
@@ -566,7 +503,7 @@ def main():
         # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
   
         
-        while canWeTrade(500, 22000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(100, 2000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             #run_lstm("NVDA")
@@ -598,11 +535,13 @@ def main():
             time.sleep(20)
 
         if DAYCOUNT >= DAILYAPILIMIT:
-            reason = "daily api limit reached"   
-        if startBalance - getCurrentBalance() - startBalance == 50:
-            reason = "we lost 50 dollars already during today's trade"     
+            reason = "daily api limit reached"  
+            logging.info(reason)  
+        if startBalance - getCurrentBalance() - startBalance == 500:
             
-        logging.info(reason)   
+            reason = "we lost 50 dollars already during today's trade"  
+            logging.info(reason)    
+              
         endBalance = getCurrentBalance()
         
         if endBalance > startBalance:
