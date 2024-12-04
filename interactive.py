@@ -434,7 +434,7 @@ def monitor_logs_for_errors(n):
             currently_running = currently_trading(n)
             
             if currently_running > 0:
-                logging.info(f"Found {currently_running} active bots, checking their logs")
+                logging.info(f"Found {currently_running} active bots, monitoring their logs for errors ")
                 logs = load_recent_logs(hours=1, n=currently_running)  # About 10 minutes
                 
                 if logs:
@@ -605,56 +605,56 @@ def main():
     
     adjectives = ["read", "explain", "summarize"]
 
-    # while True:
-    #     voice_command = recognize_voice()
-    #     adjectives = ["read", "explain", "summarize"]
-    #     if "jarvis" in voice_command:
-    #         if currently_trading(n):
-    #             speak_with_polly(f"Hey Sola, good {get_time_of_day()}. {n} bots are running. What can I do for you today?")
-    #         else:
-    #             speak_with_polly(f"Hey Sola, good {get_time_of_day()}. no bots are running now. do you need anything else")
+    while True:
+        voice_command = recognize_voice()
+        adjectives = ["read", "explain", "summarize"]
+        if "jarvis" in voice_command:
+            if currently_trading(n):
+                speak_with_polly(f"Hey Sola, good {get_time_of_day()}. {n} bots are running. What can I do for you today?")
+            else:
+                speak_with_polly(f"Hey Sola, good {get_time_of_day()}. no bots are running now. do you need anything else")
 
-    #         speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading'")
-    #         voice_command = recognize_voice()
-    #         if any(adj in voice_command for adj in adjectives):
-    #               all_logs = load_logs_for_analysis("today")
-    #               analyze_logs("summarize", all_logs)
+            speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading'")
+            voice_command = recognize_voice()
+            if any(adj in voice_command for adj in adjectives):
+                  all_logs = load_logs_for_analysis("today")
+                  analyze_logs("summarize", all_logs)
 
-    #         elif any(adj in voice_command for adj in adjectives) and "yesterday" in voice_command:
-    #               all_logs = load_logs_for_analysis("yesterday")
-    #               analyze_logs("summarize", all_logs)
+            elif any(adj in voice_command for adj in adjectives) and "yesterday" in voice_command:
+                  all_logs = load_logs_for_analysis("yesterday")
+                  analyze_logs("summarize", all_logs)
 
-    #         elif any(adj in voice_command for adj in adjectives) and "week" in voice_command:
-    #               all_logs = load_logs_for_analysis("week")
-    #               analyze_logs("summarize", all_logs)
+            elif any(adj in voice_command for adj in adjectives) and "week" in voice_command:
+                  all_logs = load_logs_for_analysis("week")
+                  analyze_logs("summarize", all_logs)
             
-    #         elif "reports" in voice_command:
-    #             get_today_reports(n)
+            elif "reports" in voice_command:
+                get_today_reports(n)
 
-    #         elif "trading" in voice_command:
-    #               currently_running = currently_trading(n)
-    #               if currently_running != 0:  
-    #                 logs = load_recent_logs(5, currently_trading(n))
-    #                 analyze_logs("is there an error here, if not give a 3 line summary", logs)
+            elif "trading" in voice_command:
+                  currently_running = currently_trading(n)
+                  if currently_running != 0:  
+                    logs = load_recent_logs(5, currently_trading(n))
+                    analyze_logs("is there an error here, if not give a 3 line summary", logs)
             
-    #         elif "stop" in voice_command:
-    #               stop_trading_bot(n)
-    #         elif "exit" in voice_command:
-    #             speak_with_polly("Exiting the program.")
-    #             break
-    #         elif "pass" in voice_command:
-    #             speak_with_polly("Exiting the program.")
-    #             pass
+            elif "stop" in voice_command:
+                  stop_trading_bot(n)
+            elif "exit" in voice_command:
+                speak_with_polly("Exiting the program.")
+                break
+            elif "pass" in voice_command:
+                speak_with_polly("Exiting the program.")
+                pass
 
-    #         elif "kill" in voice_command:
-    #             try:
-    #                 speak_with_polly("Opening a terminal to show the command to kill the trading bot")
-    #                 command = "ps aux | grep '[p]ython.*main.py' | awk '{print $2}'"
-    #                 speak_with_polly("To kill the trading bot, copy this command and paste it in your terminal:")
-    #                 speak_with_polly(command)
-    #                 speak_with_polly("Then use: kill -9 followed by the process ID shown")
-    #             except Exception as e:
-    #                 speak_with_polly(f"Error providing kill command: {str(e)}")
+            elif "kill" in voice_command:
+                try:
+                    speak_with_polly("Opening a terminal to show the command to kill the trading bot")
+                    command = "ps aux | grep '[p]ython.*main.py' | awk '{print $2}'"
+                    speak_with_polly("To kill the trading bot, copy this command and paste it in your terminal:")
+                    speak_with_polly(command)
+                    speak_with_polly("Then use: kill -9 followed by the process ID shown")
+                except Exception as e:
+                    speak_with_polly(f"Error providing kill command: {str(e)}")
 
     #         
 
