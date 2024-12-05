@@ -141,7 +141,7 @@ def load_recent_logs(hours=1, n=3):
         if os.path.exists(log_file):
             with open(log_file, 'r') as file:
                 logs = file.readlines()
-            
+            logging.info("logs loaded successfully")
             # Filter logs from the specified time period
             recent_logs = []
             for log in logs:

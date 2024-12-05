@@ -304,7 +304,7 @@ def monitorBuy(stock, dry, user_id) -> int:
             costSell = rh.stocks.get_latest_price(stock)[0]
             logging.info(f"stock sold at {costSell} after checking {count} times")
             record_transaction(user_id, stock, 'sell', costSell * quantity)
-            return costSell - costBuy
+            return float(costSell) - float(costBuy)
         else: 
             sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
             record_transaction(user_id, stock, 'sell', sellprice * quantity)
@@ -366,10 +366,13 @@ def closeDay():
         
         # Get today's transactions
         response = table.scan(
-            FilterExpression='begins_with(key, :date)',
-            ExpressionAttributeValues={
-                ':date': current_date
-            }
+        FilterExpression="begins_with(#k, :date)",
+        ExpressionAttributeNames={
+            "#k": "composite_key"  # Replace 'composite_key' with your actual attribute name
+        },
+        ExpressionAttributeValues={
+            ":date": current_date
+        }
         )
         
         # Track buys and sells

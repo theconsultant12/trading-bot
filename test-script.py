@@ -1,8 +1,8 @@
 from multiprocessing import Pool
-from datetime import datetime
+from datetime import datetime 
 import time
 import boto3
-
+from datetime import date
 current_dateTime = datetime.now()
 
 now = datetime.now()
@@ -52,20 +52,18 @@ if __name__ == '__main__':
     dynamodb = boto3.resource('dynamodb')
     table = dynamodb.Table('bot-state-db')  # Replace with your table name
 
-        
-        # Create composite key with user_id and date
-    composite_key = f"utest#{current_date}"
-        
-        # Create item for DynamoDB
-    db_item = {
-        'key': composite_key,  # Partition key: userId#date
-        'UserId': "Utest01",
-        'Date': current_date,
-        'StockID': "nvda",
-        'TransactionType': "buy",
-        'Cost': 60,
-        'Timestamp': datetime.now().isoformat()
-    }
+    # Get the current date in the desired format
+    current_date = date.today().strftime('%Y-%m-%d')
+
+    # Define filter for scanning items
+    response = table.scan(
+        FilterExpression="begins_with(#k, :date)",
+        ExpressionAttributeNames={
+            "#k": "composite_key"  # Replace 'composite_key' with your actual attribute name
+        },
+        ExpressionAttributeValues={
+            ":date": current_date
+        }
+    )
     
-    # Put item in DynamoDB
-    table.put_item(Item=db_item)
+    print(response)
