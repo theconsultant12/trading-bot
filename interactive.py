@@ -395,10 +395,18 @@ def recognize_voice():
        
             
 
-def is_trading_time():
+def is_trading_time(start_hour=9, start_minute=0, end_hour=15, end_minute=30):
     current_time = datetime.now()
-    target_time = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
-    return current_time.hour == 9 and current_time.minute == 30
+    
+    # Check if today is a weekday (Monday to Friday)
+    if current_time.weekday() >= 5: 
+        return False
+    
+    # Check if the current time is within the trading hours
+    start_time = current_time.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+    end_time = current_time.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+    
+    return start_time <= current_time <= end_time
 
 def auto_start_trading(n, dryrun="True"):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
@@ -530,10 +538,10 @@ def get_today_reports(n):
         all_reports = []
         for user in user_list[:int(n)]:
             logging.info(f"Fetching report for user: {user}")
+            composite_key = f"{user}#{today}"
             response = table.query(
-                KeyConditionExpression=Key('user_id').eq(user) & Key('date').eq(today)
+                KeyConditionExpression=Key('key').eq(composite_key)
             )
-            
             if response['Items']:
                 logging.info(f"Found {len(response['Items'])} records for user {user}")
                 for item in response['Items']:

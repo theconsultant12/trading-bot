@@ -3,6 +3,10 @@ from datetime import datetime
 import time
 import boto3
 from datetime import date
+from boto3.dynamodb.conditions import Key
+from decimal import Decimal
+from datetime import timedelta
+
 current_dateTime = datetime.now()
 
 now = datetime.now()
@@ -29,6 +33,65 @@ print(checkTime())
 def f(x):
     return x*x
 
+
+def get_today_reports(n):
+    """
+    Fetch yesterday's trading reports from DynamoDB for specified number of users.
+    Returns a formatted string of the reports.
+    """
+    print(f"Fetching yesterday's trading reports for {n} users")
+    
+    try:
+        # Initialize DynamoDB client
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('bot-state-db')
+        
+        # Get yesterday's date for filtering reports
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        all_reports = []
+        user_list = [ "U001"]
+        for user in user_list:
+            print(f"Fetching report for user: {user}")
+            # Construct the composite key using the user ID and yesterday's date
+            composite_key = f"{user}#{yesterday}"
+            response = table.query(
+                KeyConditionExpression=Key('key').eq(composite_key)
+            )
+            
+            if response['Items']:
+                print(f"Found {len(response['Items'])} records for user {user}")
+                for item in response['Items']:
+                    # Convert Decimal to float for easier handling
+                    for key, value in item.items():
+                        if isinstance(value, Decimal):
+                            item[key] = float(value)
+                    all_reports.append(item)
+            else:
+                print(f"No records found for user {user}")
+        
+        if all_reports:
+            print(f"Successfully retrieved {len(all_reports)} total reports")
+            summary = f"Found {len(all_reports)} reports for today. "
+            for report in all_reports:
+                summary += f"User {report['user_id']} "
+                if 'profit_loss' in report:
+                    summary += f"P&L: ${report['profit_loss']:.2f}. "
+                if 'trades_count' in report:
+                    summary += f"Trades: {report['trades_count']}. "
+            
+          
+            return all_reports
+        else:
+            print("No trading reports found for any users today")
+  
+            return None
+            
+    except Exception as e:
+        error_msg = f"Error fetching reports: {str(e)}"
+  
+        return None
+
 if __name__ == '__main__':
     # get the start time
     # st = time.time()
@@ -41,6 +104,7 @@ if __name__ == '__main__':
     
     
     # st = time.time()
+    print(get_today_reports(1))
     # for i in [1,2,3, 4, 5, 6, 7, 8, 9]:
     #     print(f(i))
     
@@ -49,21 +113,5 @@ if __name__ == '__main__':
     # arrelapsed_time = et - st
     
     # print(f"time of thread = {elapsed_time} \ntime of for = {arrelapsed_time}")
-    dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('bot-state-db')  # Replace with your table name
 
-    # Get the current date in the desired format
-    current_date = date.today().strftime('%Y-%m-%d')
-
-    # Define filter for scanning items
-    response = table.scan(
-        FilterExpression="begins_with(#k, :date)",
-        ExpressionAttributeNames={
-            "#k": "composite_key"  # Replace 'composite_key' with your actual attribute name
-        },
-        ExpressionAttributeValues={
-            ":date": current_date
-        }
-    )
     
-    print(response)
