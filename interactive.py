@@ -514,8 +514,8 @@ signal.signal(signal.SIGINT, signal_handler)
 
 def get_today_reports(n):
     """
-    Fetch today's trading reports from DynamoDB for specified number of users
-    Returns a formatted string of the reports
+    Fetch today's trading reports from DynamoDB for specified number of users.
+    Returns a formatted string of the reports.
     """
     logging.info(f"Fetching today's trading reports for {n} users")
     
@@ -523,8 +523,9 @@ def get_today_reports(n):
         # Initialize DynamoDB client
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('bot-state-db')
+        
+        # Get today's date for filtering reports
         today = datetime.now().strftime('%Y-%m-%d')
-        logging.info(f"Querying DynamoDB for date: {today}")
         
         all_reports = []
         for user in user_list[:int(n)]:
@@ -536,6 +537,7 @@ def get_today_reports(n):
             if response['Items']:
                 logging.info(f"Found {len(response['Items'])} records for user {user}")
                 for item in response['Items']:
+                    # Convert Decimal to float for easier handling
                     for key, value in item.items():
                         if isinstance(value, Decimal):
                             item[key] = float(value)
