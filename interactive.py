@@ -111,21 +111,33 @@ openai = OpenAI(api_key=get_parameter_value('/openai/api-key'))
 
 
 # Read the logs from a file
-def load_logs(dayArray):
+def load_logs(day):
     all_logs = []
     path = os.path.abspath(os.getcwd())
-    logging.info(f"reading logs for {dayArray}")
-    for day in dayArray:
-        log_file = os.path.join(path, f'*{day}app.log') 
-        
-        if os.path.exists(log_file):
-            with open(log_file, 'r') as file:
-                logs = file.read()
-                all_logs.append(logs)
-        else:
-            all_logs.append(f"Log file for {day} not found.")
+    logging.info(f"reading logs for {day}")
+    import glob
+
+    """
+    Loads and combines all log files from a specific date.
     
-    return "\n".join(all_logs) if all_logs else "No logs found."
+    Args:
+        directory (str): The path to the directory containing the log files.
+        date (str): The date to filter logs by in the format 'YYYYMMDD'.
+        
+    Returns:
+        str: The combined content of all logs from the specified date.
+    """
+    log_files_pattern = os.path.join(path, f"*{day}app.log")
+    log_files = glob.glob(log_files_pattern)
+    
+    combined_logs = []
+    
+    for log_file in log_files:
+        with open(log_file, 'r') as file:
+            combined_logs.append(file.read())
+    
+    return "\n".join(combined_logs)
+    
 
 def load_recent_logs(hours=1, n=3):
     path = os.path.abspath(os.getcwd())
@@ -158,7 +170,7 @@ def load_recent_logs(hours=1, n=3):
     if all_user_logs:
         return "\n".join(all_user_logs)
     else:
-        speak_with_polly(f"No logs found in the last {hours} hour(s) for any user.")
+        logging.debug(f"No logs found in the last {hours} hour(s) for any user.")
         return None
 
 
@@ -224,10 +236,10 @@ def get_date_range(command):
     logging.warning("No valid date command found in the input.")
     return dateArray
 
-def load_logs_for_analysis(command):
+def load_logs_for_analysis(command='today'):
     date_range = get_date_range(command)
     all_logs = ""
-
+    logging.info(f"{date_range} type {type(date_range)}")
     for date in date_range:
         logs = load_logs(date)
         if logs:
@@ -310,13 +322,14 @@ def stop_trading_bot(n):
 
 # Function to send the log data to GPT and get an explanation
 def gpt_logs(keyword, log_text):
+    logging.info(log_text)
     response = openai.chat.completions.create(
         model="gpt-3.5-turbo",  # Updated to "gpt-4-turbo" since "gpt-4o-mini" might be incorrect or unavailable
         messages=[  # Messages should be a list of dicts
             {"role": "user", "content": f"{keyword} the following logs in simple terms:\n\n{log_text}. make the response concise"}
         ]
     )
-    print(response.choices[0].message.content)
+    logging.info(response.choices[0].message.content)
     return response.choices[0].message.content
 
     #return response.choices[0].message['content']
@@ -330,9 +343,9 @@ def currently_trading(n):
             count += 1
             
     if count:
-        speak_with_polly(f"{count} trading bot is running.")
+       logging.info(f"{count} trading bot is running.")
     else:
-        speak_with_polly("no bots running")
+        logging.info("no bots running")
     return count
           
 
@@ -395,18 +408,15 @@ def recognize_voice():
        
             
 
-def is_trading_time(start_hour=9, start_minute=0, end_hour=15, end_minute=30):
+def is_trading_time():
     current_time = datetime.now()
     
     # Check if today is a weekday (Monday to Friday)
     if current_time.weekday() >= 5: 
         return False
     
-    # Check if the current time is within the trading hours
-    start_time = current_time.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
-    end_time = current_time.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
-    
-    return start_time <= current_time <= end_time
+    # Check if the current time is exactly 9:30 AM
+    return current_time.hour == 9 and current_time.minute == 30 
 
 def auto_start_trading(n, dryrun="True"):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
@@ -417,14 +427,14 @@ def auto_start_trading(n, dryrun="True"):
             group = "technology"
             
             logging.info(f"Trading time detected. Starting {n} bots with mode={mode} and group={group}")
-            speak_with_polly(f"It's 9 AM. Starting {n} trading bot with default settings.")
+            speak_with_polly(f"It's {datetime.now().strftime("%H:%M:%S")}. Starting {n} trading bot with default settings.")
             
             for user in user_list[:int(n)]:
                 logging.debug(f"Starting bot for user {user}")
                 start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
             
             logging.info(f"All {n} bots started successfully")
-            time.sleep(60)  # Wait for 60 seconds to avoid multiple starts
+            time.sleep(20)  # Wait for 60 seconds to avoid multiple starts
             
             message = f"Hello Olusola good day. Jarvis has started {n} bots. {getCurrentBalance()}"
             logging.debug(f"Sending start confirmation message: {message}")
@@ -468,6 +478,9 @@ def monitor_logs_for_errors(n):
 
 def is_closing_time():
     current_time = datetime.now()
+    if current_time.weekday() >= 5: 
+        return False
+    
     return current_time.hour == 15 and current_time.minute == 30
 
 def monitor_trading_hours(n):
@@ -578,7 +591,7 @@ def get_today_reports(n):
 
 
 def main():
-    n = 1
+    n = 3
    
     
    
@@ -586,17 +599,16 @@ def main():
     ## TEST SUITE
     ##########################################################
 
-    for user in user_list[:int(n)]:
+  
+    # logging.debug(f"Starting bot for user testUser")
+    # start_trading_bot(mode="granular", group="biopharmaceutical", dryrun="True", user_id="testUser")
+    # for user in user_list[int(n):2]:
                 
-                logging.debug(f"Starting bot for user {user}")
-                start_trading_bot(mode="granular", group="biopharmaceutical", dryrun="True", user_id=user)
-    for user in user_list[int(n):2]:
-                
-        logging.debug(f"Starting bot for user {user}")
-        start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
+    #     logging.debug(f"Starting bot for user {user}")
+    #     start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
             
-    logging.info(f"All {n} bots started successfully")
-    time.sleep(60)  # W
+    # logging.info(f"All {n} bots started successfully")
+    # time.sleep(60)  # W
     ##########################################################
     # END TEST SUITE
     ##########################################################
@@ -638,7 +650,7 @@ def main():
                   all_logs = load_logs_for_analysis("week")
                   analyze_logs("summarize", all_logs)
             
-            elif "reports" in voice_command:
+            elif "report" in voice_command:
                 get_today_reports(n)
 
             elif "trading" in voice_command:
@@ -649,12 +661,19 @@ def main():
             
             elif "stop" in voice_command:
                   stop_trading_bot(n)
+                  
+            elif "start" in voice_command:
+                for user in user_list[int(n):2]:
+                    logging.debug(f"Starting bot for user {user}")
+                    start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
+
             elif "exit" in voice_command:
                 speak_with_polly("Exiting the program.")
                 break
             elif "pass" in voice_command:
-                speak_with_polly("Exiting the program.")
+                speak_with_polly("Call me if you need anything.")
                 pass
+
 
             elif "kill" in voice_command:
                 try:

@@ -1,1 +1,1 @@
-write sepparate logs for each user
+bots are not being killed as needed

@@ -276,7 +276,7 @@ def monitorBuy(stock) -> int:
         quantity = int(500/average)
         count = 0
         priceBefore = getCurrentBalance()
-        while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
+        while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0005):
             if not checkTime():
                 logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
                 time.sleep(3600)
@@ -290,7 +290,7 @@ def monitorBuy(stock) -> int:
         time.sleep(10)
         logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         count = 0
-        while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
+        while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0005):
             if not checkTime():
                 logging.info(f"It seems like we are not in a trading time we will wait for trading to start current stock is {stock}")
                 time.sleep(3600)

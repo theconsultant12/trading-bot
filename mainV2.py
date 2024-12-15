@@ -278,9 +278,9 @@ def monitorBuy(stock, dry, user_id) -> int:
         while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
             count += 1
             DAYCOUNT += 1
-            time.sleep(2)
+            time.sleep(50)
             if count%49 == 0:
-                time.sleep(10)
+                time.sleep(60)
         if dry:
             costBuy = rh.stocks.get_latest_price(stock)[0]
             record_transaction(user_id, stock, 'buy', costBuy * quantity)
@@ -296,9 +296,9 @@ def monitorBuy(stock, dry, user_id) -> int:
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
             count += 1
             DAYCOUNT += 1
-            time.sleep(2)
+            time.sleep(50)
             if count%49 == 0:
-                time.sleep(10)
+                time.sleep(60)
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
         if dry:
             costSell = rh.stocks.get_latest_price(stock)[0]
@@ -316,6 +316,62 @@ def monitorBuy(stock, dry, user_id) -> int:
         logging.error(f"Error in monitorBuy: {str(e)}")
         diff = 0
     return diff
+
+
+# def monitorBuyCrypto(crypto, dry, user_id) -> int:
+#     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
+#     prices = []
+#     global DAYCOUNT 
+#     try:
+
+#         average = getWeightedAverage(crypto)
+#         # we are trying to spend a reasonable amount per stock buy
+#         logging.info(average)
+#         quantity = int(500/average)
+#         count = 0
+#         logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(crypto)[0]}")
+#         while float(rh.stocks.get_latest_price(crypto)[0]) > average - (average * 0.0012):
+#             count += 1
+#             DAYCOUNT += 1
+#             time.sleep(2)
+#             if count%49 == 0:
+#                 time.sleep(60)
+#         if dry:
+#             costBuy = rh.stocks.get_latest_price(stock)[0]
+#             record_transaction(user_id, stock, 'buy', costBuy * quantity)
+#             logging.info(f"{costBuy}stock bought at {costBuy}  after checking {count} times")
+#         else:
+#             buyprice = rh.orders.order_buy_market(stock, quantity)  
+#             record_transaction(user_id, stock, 'buy', buyprice * quantity)
+#             logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
+#         time.sleep(10)
+        
+#         count = 0
+#         logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
+#         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
+#             count += 1
+#             DAYCOUNT += 1
+#             time.sleep(2)
+#             if count%49 == 0:
+#                 time.sleep(60)
+#         # sellprice = rh.orders.order_sell_market(stock, quantity) 
+#         if dry:
+#             costSell = rh.stocks.get_latest_price(stock)[0]
+#             logging.info(f"stock sold at {costSell} after checking {count} times")
+#             record_transaction(user_id, stock, 'sell', costSell * quantity)
+#             return float(costSell) - float(costBuy)
+#         else: 
+#             sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
+#             record_transaction(user_id, stock, 'sell', sellprice * quantity)
+#             logging.info(f"stock sold at {sellprice} after checking {count} times") 
+       
+#         diff = (sellprice * quantity) - (buyprice * quantity)
+#         logging.info(f'we made {diff} on this sale')
+#     except Exception as e:
+#         logging.error(f"Error in monitorBuy: {str(e)}")
+#         diff = 0
+#     return diff
+
 
 #get total portfolio data
 
@@ -506,7 +562,7 @@ def main():
         # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
   
         
-        while canWeTrade(100, 2000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(1, 2000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             #run_lstm("NVDA")
