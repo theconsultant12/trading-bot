@@ -286,7 +286,7 @@ def stop_trading_bot(n):
             # Check if the PID file exists
             if not os.path.exists(pid_file_path):
                 speak_with_polly(f"{user} bot is not running.")
-                return f"{user} bot is not running."
+                logging.info(f"{user} bot is not running.")
             
             # Read the PID from the file
             with open(pid_file_path, 'r') as f:
@@ -296,7 +296,7 @@ def stop_trading_bot(n):
             os.kill(pid, signal.SIGTERM)
             
             # Wait for a short time to allow the process to terminate
-            time.sleep(2)
+            time.sleep(15)
             
             # Check if the process has terminated
             try:
@@ -311,7 +311,7 @@ def stop_trading_bot(n):
             # Remove the PID file
             os.remove(pid_file_path)
             
-            return f"{user} bot stopped."
+        return f"{n} bot stopped."
     except Exception as e:
         error_message = f"Failed to stop trading bot. Error: {str(e)}"
         speak_with_polly(error_message)
@@ -432,6 +432,7 @@ def auto_start_trading(n, dryrun="True"):
             for user in user_list[:int(n)]:
                 logging.debug(f"Starting bot for user {user}")
                 start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
+                time.sleep(20)
             
             logging.info(f"All {n} bots started successfully")
             time.sleep(20)  # Wait for 60 seconds to avoid multiple starts
@@ -535,60 +536,81 @@ signal.signal(signal.SIGINT, signal_handler)
 
 def get_today_reports(n):
     """
-    Fetch today's trading reports from DynamoDB for specified number of users.
-    Returns a formatted string of the reports.
+    Fetch yesterday's trading reports from DynamoDB for the specified number of users.
+    Returns a formatted string summarizing the reports.
     """
-    logging.info(f"Fetching today's trading reports for {n} users")
-    
+    logging.info(f"Fetching yesterday's trading reports for {n} users")
+
     try:
         # Initialize DynamoDB client
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('bot-state-db')
-        
-        # Get today's date for filtering reports
-        today = datetime.now().strftime('%Y-%m-%d')
-        
+
+        # Get yesterday's date for filtering reports
+        yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+
         all_reports = []
-        for user in user_list[:int(n)]:
+        user_list = [f"U{str(i).zfill(3)}" for i in range(1, n + 1)]
+
+        for user in user_list:
             logging.info(f"Fetching report for user: {user}")
-            composite_key = f"{user}#{today}"
-            response = table.query(
-                KeyConditionExpression=Key('key').eq(composite_key)
-            )
-            if response['Items']:
-                logging.info(f"Found {len(response['Items'])} records for user {user}")
-                for item in response['Items']:
-                    # Convert Decimal to float for easier handling
-                    for key, value in item.items():
-                        if isinstance(value, Decimal):
-                            item[key] = float(value)
-                    all_reports.append(item)
-            else:
-                logging.warning(f"No records found for user {user}")
-        
+            # Construct the composite key using the user ID and yesterday's date
+            composite_key = f"{user}#{yesterday}"
+            try:
+                response = table.query(
+                    KeyConditionExpression=Key('key').eq(composite_key)
+                )
+
+                if response.get('Items'):
+                    logging.info(f"Found {len(response['Items'])} records for user {user}")
+                    for item in response['Items']:
+                        # Convert Decimal to float for easier handling
+                        for key, value in item.items():
+                            if key == 'Cost':
+                                if isinstance(value, str) and value.replace('.', '', 1).isdigit():
+                                   item[key] = Decimal(value)
+                        all_reports.append(item)
+                else:
+                    logging.warning(f"No records found for user {user}")
+
+            except Exception as e:
+                logging.error(f"Error fetching data for user {user}: {e}")
         if all_reports:
             logging.info(f"Successfully retrieved {len(all_reports)} total reports")
-            summary = f"Found {len(all_reports)} reports for today. "
-            for report in all_reports:
-                summary += f"User {report['user_id']} "
-                if 'profit_loss' in report:
-                    summary += f"P&L: ${report['profit_loss']:.2f}. "
-                if 'trades_count' in report:
-                    summary += f"Trades: {report['trades_count']}. "
-            
-            speak_with_polly(summary)
-            return all_reports
-        else:
-            logging.warning("No trading reports found for any users today")
-            speak_with_polly("No trading reports found for today.")
-            return None
-            
-    except Exception as e:
-        error_msg = f"Error fetching reports: {str(e)}"
-        logging.error(error_msg, exc_info=True)
-        speak_with_polly(error_msg)
-        return None
+            summary = f"Found {len(all_reports)} reports for yesterday.\n"
 
+            for user in user_list:
+                
+                buy = 0.0
+                sell = 0.0
+                for report in all_reports:
+                    if report.get('UserId') == user:
+                        if report.get('TransactionType') == "buy":
+                            costPrice = report.get("Cost")
+                            parts = costPrice.split('.')    
+                            if len(parts) > 2:
+                                value = f"{parts[0]}.{''.join(parts[1:])}"
+                            buy = float(Decimal(value))
+                            
+                        elif report.get('TransactionType') == "sell":
+                            costPrice = report.get("Cost")
+                            parts = costPrice.split('.')    
+                            if len(parts) > 2:
+                                value = f"{parts[0]}.{''.join(parts[1:])}"
+                            sell = float(Decimal(value))
+    
+                summary += f"User {user} spent {buy:.2f} on buys and earned {sell:.2f} from sells.\n"
+
+            logging.info(summary)
+            return summary
+        else:
+            logging.warning("No trading reports found for any users yesterday.")
+            return "No trading reports found."
+
+    except Exception as e:
+        error_msg = f"Error fetching reports: {e}"
+        print(error_msg)
+        return error_msg
 
 def main():
     n = 3

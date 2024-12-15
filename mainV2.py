@@ -18,6 +18,7 @@ import pandas as pd
 import atexit
 import signal
 import json
+from decimal import Decimal
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -401,7 +402,7 @@ def record_transaction(user_id, stock, type, cost):
             'Date': current_date,
             'StockID': stock,
             'TransactionType': type,
-            'Cost': cost,
+            'Cost': Decimal(cost),
             'Timestamp': datetime.now().isoformat()
         }
         
