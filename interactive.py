@@ -11,7 +11,7 @@ import signal
 import time
 from openai import OpenAI
 import threading
-from mainV2 import  getCurrentBalance
+from mainV2 import  getCurrentBalance, login
 import logging
 import smtplib
 from boto3.dynamodb.conditions import Key
@@ -436,7 +436,7 @@ def auto_start_trading(n, dryrun="True"):
             
             logging.info(f"All {n} bots started successfully")
             time.sleep(20)  # Wait for 60 seconds to avoid multiple starts
-            
+            login()
             message = f"Hello Olusola good day. Jarvis has started {n} bots. {getCurrentBalance()}"
             logging.debug(f"Sending start confirmation message: {message}")
             send_message("6185810303", "att", message)

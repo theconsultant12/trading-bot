@@ -1,1 +1,14 @@
-bots are not being killed as needed
+now we have a bot and a controller
+fix all errors till date
+    
+    ERROR - Error in monitorBuy: float() argument must be a string or a number, not 'NoneType' | Error from robinhood
+fix report sending none | Fixed
+
+
+all bots have the tendency to  run the same trade stock
+if average is more than current, buy immediately
+
+
+Big tasks:
+Create a cryptocurrentcy version of the trading bot using python. 
+Create a C++ version for more fine grained and lightening fast trading
