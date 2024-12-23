@@ -17,6 +17,7 @@ import smtplib
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 import robin_stocks.robinhood as rh
+import pytz  # Add this import at the top
 
 
 now = datetime.now()
@@ -351,7 +352,8 @@ def currently_trading(n):
 
 
 def get_time_of_day():
-    current_hour = datetime.now().hour  # Get the current hour (0-23)
+    eastern = pytz.timezone('US/Eastern')  # Define the Eastern timezone
+    current_hour = datetime.now(eastern).hour  # Get the current hour in Eastern Time
 
     if 5 <= current_hour < 12:
         return "morning"
@@ -409,7 +411,8 @@ def recognize_voice():
             
 
 def is_trading_time():
-    current_time = datetime.now()
+    eastern = pytz.timezone('US/Eastern')  # Define the Eastern timezone
+    current_time = datetime.now(eastern)  # Get the current time in Eastern Time
     
     # Check if today is a weekday (Monday to Friday)
     if current_time.weekday() >= 5: 
@@ -427,12 +430,12 @@ def auto_start_trading(n, dryrun="True"):
             group = "technology"
             
             logging.info(f"Trading time detected. Starting {n} bots with mode={mode} and group={group}")
-            speak_with_polly(f"It's {datetime.now().strftime("%H:%M:%S")}. Starting {n} trading bot with default settings.")
+            speak_with_polly(f"It's {datetime.now().strftime('%H:%M:%S')}. Starting {n} trading bot with default settings.")
             
             for user in user_list[:int(n)]:
                 logging.debug(f"Starting bot for user {user}")
                 start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
-                time.sleep(20)
+                time.sleep(180)
             
             logging.info(f"All {n} bots started successfully")
             time.sleep(20)  # Wait for 60 seconds to avoid multiple starts
@@ -478,7 +481,8 @@ def monitor_logs_for_errors(n):
             time.sleep(600)  # Continue monitoring even if there's an error
 
 def is_closing_time():
-    current_time = datetime.now()
+    eastern = pytz.timezone('US/Eastern')  # Define the Eastern timezone
+    current_time = datetime.now(eastern)  # Get the current time in Eastern Time
     if current_time.weekday() >= 5: 
         return False
     
@@ -628,6 +632,7 @@ def main():
                 
     #     logging.debug(f"Starting bot for user {user}")
     #     start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
+    #     time.sleep(30)
             
     # logging.info(f"All {n} bots started successfully")
     # time.sleep(60)  # W

@@ -46,7 +46,7 @@ def get_today_reports(n):
         table = dynamodb.Table('bot-state-db')
 
         # Get yesterday's date for filtering reports
-        yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
         all_reports = []
         user_list = [f"U{str(i).zfill(3)}" for i in range(1, n + 1)]
