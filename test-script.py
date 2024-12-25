@@ -33,6 +33,35 @@ print(checkTime())
 def f(x):
     return x*x
 
+def record_transaction(user_id, stock, type, cost):
+    try:
+        # Initialize DynamoDB client
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('bot-state-db')  # Replace with your table name
+    
+            
+            # Create composite key with user_id and date
+        composite_key = f"{user_id}#{current_date}"
+            
+            # Create item for DynamoDB
+        db_item = {
+            'key': composite_key,  # Partition key: userId#date
+            'UserId': user_id,
+            'Date': current_date,
+            'StockID': stock,
+            'TransactionType': type,
+            'Cost': cost,
+            'Timestamp': datetime.now().isoformat()
+        }
+        
+        # Put item in DynamoDB
+        table.put_item(Item=db_item)
+            
+        print(f"Data written to DynamoDB successfully for user {user_id}")
+    except Exception as e:
+        print(f"Failed to write to DynamoDB: {str(e)}")
+
+
 def get_today_reports(n):
     """
     Fetch yesterday's trading reports from DynamoDB for the specified number of users.
@@ -115,4 +144,4 @@ def get_today_reports(n):
 
 if __name__ == '__main__':
     #record_transaction("test-user000", "NVDA", "buy", 200)
-    print(get_today_reports(3))
+    record_transaction("test-user", "mmm", 'buy', 200)

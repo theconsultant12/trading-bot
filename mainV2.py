@@ -402,7 +402,7 @@ def record_transaction(user_id, stock, type, cost):
             'Date': current_date,
             'StockID': stock,
             'TransactionType': type,
-            'Cost': Decimal(cost),
+            'Cost': cost,
             'Timestamp': datetime.now().isoformat()
         }
         
