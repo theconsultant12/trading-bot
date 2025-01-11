@@ -62,6 +62,10 @@ def windowed_df_to_date_X_y(windowed_dataframe):
     logging.info("Converted windowed DataFrame to X and Y datasets")
     return dates, X.astype(np.float32), Y.astype(np.float32)
 
+
+
+
+
 def run_lstm_granular(item, price):
     logging.info(f"Running LSTM granular model on {item}")
     
@@ -134,3 +138,66 @@ def run_lstm_granular(item, price):
     return predicted_price[0][0]
 
     
+def run_lstm_granular_crypto(crypto_symbol, price):
+    """
+    Predicts the next hour's price for a given cryptocurrency.
+    """
+    logging.info(f"Running LSTM granular model on {crypto_symbol}")
+    
+    # Retrieve historical cryptocurrency data
+    response = rh.crypto.get_crypto_historicals(
+        crypto_symbol,
+        interval='hour',
+        span='week',
+        bounds='24_7',
+        info=None
+    )
+    
+    if not response:
+        logging.error(f"No data returned for {crypto_symbol}. Check the symbol or API limits.")
+        return None
+
+    # Preprocess the input data
+    df = preprocess_data(response)
+
+    # Convert the DataFrame to a windowed DataFrame for LSTM
+    windowed_df = df_to_windowed_df(df, n=3)
+    dates, X, y = windowed_df_to_date_X_y(windowed_df)
+
+    # Split data into training, validation, and test sets
+    q_80 = int(len(dates) * 0.8)
+    q_90 = int(len(dates) * 0.9)
+
+    dates_train, X_train, y_train = dates[:q_80], X[:q_80], y[:q_80]
+    dates_val, X_val, y_val = dates[q_80:q_90], X[q_80:q_90], y[q_80:q_90]
+    dates_test, X_test, y_test = dates[q_90:], X[q_90:], y[q_90:]
+    logging.info(f"Generating granular crypto model of {crypto_symbol}")
+    
+    # Build and compile the LSTM model
+    model = Sequential([
+        layers.Input((3, 1)),
+        layers.LSTM(64),
+        layers.Dense(32, activation='relu'),
+        layers.Dense(32, activation='relu'),
+        layers.Dense(1)
+    ])
+
+    model.compile(
+        loss='mse', 
+        optimizer=Adam(learning_rate=0.001),
+        metrics=['mean_absolute_error']
+    )
+
+    logging.info("Training LSTM model")
+    model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=100, verbose=1)
+    logging.info("Completed training LSTM model")
+
+    # Predict the next value based on the latest window
+    latest_data = df.tail(3)['Close'].to_numpy().reshape((1, 3, 1)).astype(np.float32)
+    predicted_price = model.predict(latest_data)
+
+    # Return the predicted price for the next hour
+    logging.info(f"Predicted price for the next hour: {predicted_price[0][0]} based on the current price: {price}")
+
+    return predicted_price[0][0]
+

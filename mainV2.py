@@ -275,17 +275,10 @@ def monitorBuy(stock, dry, user_id) -> int:
         logging.info(average)
         quantity = int(500/average)
         count = 0
-        logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(stock)[0]}")
-        while float(rh.stocks.get_latest_price(stock)[0]) > average - (average * 0.0012):
-            count += 1
-            DAYCOUNT += 1
-            time.sleep(50)
-            if count%49 == 0:
-                time.sleep(60)
         if dry:
             costBuy = rh.stocks.get_latest_price(stock)[0]
             record_transaction(user_id, stock, 'buy', costBuy * quantity)
-            logging.info(f"{costBuy}stock bought at {costBuy}  after checking {count} times")
+            logging.info(f"{costBuy}stock bought at {costBuy}  without checking")
         else:
             buyprice = rh.orders.order_buy_market(stock, quantity)  
             record_transaction(user_id, stock, 'buy', buyprice * quantity)
@@ -293,7 +286,7 @@ def monitorBuy(stock, dry, user_id) -> int:
         time.sleep(10)
         
         count = 0
-        logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
+        logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average} buy price is {costBuy if dry else buyprice}")
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
             count += 1
             DAYCOUNT += 1
@@ -567,29 +560,34 @@ def main():
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             #run_lstm("NVDA")
-            for item in topTrade:
+            for stock_id in topTrade:
                 if args.mode == "granular":
-                    latest_price = float(rh.stocks.get_latest_price(item)[0])
-                    predicted_price = run_lstm_granular(item, latest_price)
+                    latest_price = float(rh.stocks.get_latest_price(stock_id)[0])
+                    predicted_price = run_lstm_granular(stock_id, latest_price)
                     
                     if latest_price > predicted_price:
-                        logging.info(f"Predicted price of {item} is less than latest price. moving to the next stock")
-                    if latest_price < predicted_price:
-                        logging.info(f"Predicted price of {item} is greater than latest price. We will trade this")
-                        logging.info(f"trading {item}")
-                        diff = monitorBuy(item, args.dry_run, args.user_id)
+                        logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
+                    data = rh.stocks.get_stock_historicals(stock_id,interval="10minute", span="week")
+                    lowest_price = min(float(entry['low_price']) for entry in data)
+                    highest_price = min(float(entry['high_price']) for entry in data)
+                    if latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
+                        logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
+                    if latest_price < predicted_price and latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
+                        logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
+                        logging.info(f"trading {stock_id}")
+                        diff = monitorBuy(stock_id, args.dry_run, args.user_id)
                         estimatedProfitorLoss += diff
                         time.sleep(10)
                 else:
-                    latest_price = float(rh.stocks.get_latest_price(item)[0])
-                    predicted_price = run_lstm(item, latest_price)
+                    latest_price = float(rh.stocks.get_latest_price(stock_id)[0])
+                    predicted_price = run_lstm(stock_id, latest_price)
                     
                     if latest_price > predicted_price:
-                        logging.info(f"Predicted price of {item} is less than latest price. moving to the next stock")
+                        logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
                     if latest_price < predicted_price:
-                        logging.info(f"Predicted price of {item} is greater than latest price. we will trade this")
-                        logging.info(f"trading {item}")
-                        diff = monitorBuy(item, args.dry_run, args.user_id)
+                        logging.info(f"Predicted price of {stock_id} is greater than latest price. we will trade this")
+                        logging.info(f"trading {stock_id}")
+                        diff = monitorBuy(stock_id, args.dry_run, args.user_id)
                         estimatedProfitorLoss += diff
                         time.sleep(10)
             time.sleep(20)
