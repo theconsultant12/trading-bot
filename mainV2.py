@@ -556,7 +556,7 @@ def main():
         # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
   
         
-        while canWeTrade(1, 2000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(0, 2000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
             #run_lstm("NVDA")
