@@ -1,16 +1,11 @@
 import robin_stocks.robinhood as rh
-import time
-from multiprocessing import Pool
-import importlib.util
 import sys
 from multiprocessing import Pool
 from datetime import datetime, timedelta
 import time
 import logging
-import smtplib
 import os
 import argparse
-import csv
 import boto3
 from predict_stock import run_lstm
 from predict_stock_granular import run_lstm_granular
@@ -62,27 +57,7 @@ def get_parameter_value(parameter_name):
         return None
 
 
-def get_stored_token():
-    """Get existing auth token from SSM Parameter Store and check if it's valid"""
-    try:
-        ssm_client = boto3.client('ssm')
-        response = ssm_client.get_parameter(
-            Name='/robinhood/auth_token',
-            WithDecryption=True
-        )
-        
-        token_data = json.loads(response['Parameter']['Value'])
-        stored_time = datetime.fromisoformat(token_data['timestamp'])
-        expires_in = token_data['expires_in']
-        
-        # Check if token is still valid (with 1-hour buffer)
-        if datetime.now() - stored_time < timedelta(seconds=expires_in - 3600):
-            return token_data['token']
-        
-        return None
-    except Exception as e:
-        logging.error(f"Failed to get auth token: {str(e)}")
-        return None
+
 
 def login():
     """Login using stored token or notify if reauth needed"""
@@ -125,62 +100,7 @@ def canWeTrade(minimumBalance, maximumBalance) -> bool:
     return trade
 
 
-def oldgetAllTrades(group) -> dict:
-    """Here we get the stocks that exist under the category tag
-    ‘biopharmaceutical’
-    upcoming-earnings
-    most-popular-under-25
-    technology"""
-    # update max for every
-    global DAYCOUNT 
-    count = 0
-    min_max_values = {}
-    max_values = {}
-    stockArray = []
-    stockList = []
-    logging.info("getting all top moving trades in the past 40 seconds")
-    try:
-        while count < 10:
-            response = rh.markets.get_all_stocks_from_market_tag(group)
-            DAYCOUNT += 1
-            for stock in response[:500]:
-                if float(stock.get("ask_price")) < 200:
-                    stockArray.append({stock.get("symbol"):stock.get("ask_price")}) 
-            # logging.info(f"stock retrieved {stockArray}")
-            for stock in stockArray:
-                for key, value in stock.items():
-                    value = float(value)
-                if key in min_max_values:
-                    if value < min_max_values[key]['min']:
-                        min_max_values[key]['min'] = value
-                    if value > min_max_values[key]['max']:
-                        min_max_values[key]['max'] = value
-                else:
-                    min_max_values[key] = {'min': value, 'max': value}
-            count += 1
-            
-        # Calculate the differences and percentage changes and store them in a list of tuples
-        differences = [(stock, values['max'] - values['min']) for stock, values in min_max_values.items()]
-        logging.info("analysis completed")
-        # Filter out stocks with no difference
-        differences = [item for item in differences if item[1] != 0]
 
-        # Sort the list by the differences in descending order
-        differences.sort(key=lambda x: x[1], reverse=True)
-
-        # logging.info the top 5 differences
-        if differences:
-            logging.info("Top 5 stocks with the highest differences and their percentage changes:")
-            for i in range(min(5, len(differences))):
-                stock, difference, percentage_change = differences[i]
-                logging.info(f'{stock} - Difference: {difference}, Percentage Change: {percentage_change:.2f}%')
-                stockList.append(stock)
-        else:
-            logging.info('No differences found.')
-        logging.info("stock list generated successfully")
-    except Exception as e:
-        logging.error(f"Error in getAllTrades: {str(e)}")
-    return stockList
 
 def getAllTrades(group) -> list:
     """Here we get the stocks that exist under the category tag
