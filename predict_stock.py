@@ -11,17 +11,43 @@ from keras.models import Sequential
 from keras.optimizers import Adam
 from keras import layers
 
+
+FINNHUB_API_KEY = "your_finnhub_api_key"
+
 def download_csv(stock, days=100):
-    logging.info(f"Downloading CSV data for {stock}")
-    
+    logging.info(f"Downloading CSV data for {stock} using Finnhub")
+
     now = datetime.datetime.now()
-    start_date = now - timedelta(days=days)
-    start_timestamp = int(time.mktime(start_date.timetuple()))
-    end_timestamp = int(time.mktime(now.timetuple()))
-    
-    url = f"https://query1.finance.yahoo.com/v7/finance/download/{stock}?period1={start_timestamp}&period2={end_timestamp}&interval=1d&events=history&includeAdjustedClose=true"
-    urllib.request.urlretrieve(url, f"{stock}.csv")
-    
+    start_date = now - datetime.timedelta(days=days)
+    start_timestamp = int(start_date.timestamp())
+    end_timestamp = int(now.timestamp())
+
+    url = f"https://finnhub.io/api/v1/stock/candle"
+    params = {
+        "symbol": stock,
+        "resolution": "D",  # Daily
+        "from": start_timestamp,
+        "to": end_timestamp,
+        "token": FINNHUB_API_KEY
+    }
+
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    if data.get("s") != "ok":
+        logging.error(f"Failed to download data for {stock}: {data}")
+        return
+
+    df = pd.DataFrame({
+        "timestamp": [datetime.datetime.fromtimestamp(ts) for ts in data["t"]],
+        "open": data["o"],
+        "high": data["h"],
+        "low": data["l"],
+        "close": data["c"],
+        "volume": data["v"]
+    })
+
+    df.to_csv(f"{stock}.csv", index=False)
     logging.info(f"Downloaded CSV data for {stock}")
 
 def str_to_datetime(s):

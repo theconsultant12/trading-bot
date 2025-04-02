@@ -7,6 +7,48 @@ import logging
 from datetime import datetime
 import time
 import argparse
+import boto3
+
+import logging
+import time
+import requests
+
+
+def get_parameter_value(parameter_name):
+
+    ssm_client = boto3.client('ssm')
+
+    try:
+        response = ssm_client.get_parameter(Name=parameter_name)
+        return response['Parameter']['Value']
+
+    except ssm_client.exceptions.ParameterNotFound:
+        print(f"Parameter '{parameter_name}' not found.")
+        return None
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        return None
+
+FINNHUB_API_KEY = get_parameter_value("finhub_api_key")
+BASE_URL = "https://finnhub.io/api/v1"
+
+CATEGORY_MAP = {
+    "technology": [
+        "AAPL", "MSFT", "GOOGL", "NVDA", "AMD", "INTC", "META", "CRM", "ADBE", "TSLA",
+        "AVGO", "ORCL", "QCOM", "CSCO", "IBM", "SHOP", "PLTR", "SNOW", "UBER", "TWLO",
+        "NET", "NOW", "TEAM", "SQ", "ROKU"
+    ],
+    "biopharmaceutical": [
+        "AMGN", "GILD", "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "SAGE", "IONS", "ALNY",
+        "NBIX", "BLUE", "ARNA", "ABBV", "PFE", "LLY", "AZN", "NVS", "JNJ", "SNY",
+        "VRTX", "BMY", "ZNTL", "NKTR", "XLRN"
+    ]
+}
+
+DAYCOUNT = 0
+
+
 
 def getWeightedAverage(stock):
     data = rh.stocks.get_stock_historicals(stock,interval="10minute", span="day")
@@ -78,60 +120,64 @@ def get_parameter_value(parameter_name):
         return None
     
 
+
+
 def getAllTrades(group) -> list:
-    """Here we get the stocks that exist under the category tag
-    ‘biopharmaceutical’, ‘upcoming-earnings’, ‘most-popular-under-25’, ‘technology’"""
-    global DAYCOUNT 
-    count = 0
-    min_max_values = {}
-    stockArray = []
     stockList = []
-    logging.info("getting all top moving trades in the past 40 seconds")
+    movers = []
+
+    logging.info("Getting top movers over the last hour using Finnhub historical data")
+
+    tickers = CATEGORY_MAP.get(group, [])
+    if not tickers:
+        logging.warning(f"No tickers found for category '{group}'")
+        return []
+
+    # Calculate UNIX timestamps for the past hour
+    end_time = int(time.time())
+    start_time = end_time - 60 * 60  # 1 hour ago
 
     try:
-        while count < 10:
-            response = rh.markets.get_all_stocks_from_market_tag(group)
-            DAYCOUNT += 1
-            for stock in response[:500]:
-                if float(stock.get("ask_price")) < 200:
-                    stockArray.append({stock.get("symbol"): stock.get("ask_price")})
+        for symbol in tickers:
+            url = f"{BASE_URL}/stock/candle"
+            params = {
+                "symbol": symbol,
+                "resolution": "1",  # 1-minute candles
+                "from": start_time,
+                "to": end_time,
+                "token": FINNHUB_API_KEY
+            }
 
-            for stock in stockArray:
-                for key, value in stock.items():
-                    value = float(value)
-                    if key in min_max_values:
-                        if value < min_max_values[key]['min']:
-                            min_max_values[key]['min'] = value
-                        if value > min_max_values[key]['max']:
-                            min_max_values[key]['max'] = value
-                    else:
-                        min_max_values[key] = {'min': value, 'max': value}
-            count += 1
+            res = requests.get(url, params=params)
+            print(res)
+            data = res.json()
 
-        # Calculate the differences and store them in a list of tuples
-        differences = [(stock, values['max'] - values['min']) for stock, values in min_max_values.items()]
+            if data.get("s") != "ok" or not data.get("o"):
+                continue
 
-        # Filter out stocks with no difference
-        differences = [item for item in differences if item[1] != 0]
+            start_price = data["o"][0]
+            end_price = data["c"][-1]
+            difference = abs(end_price - start_price)
 
-        # Sort the list by the differences in descending order
-        differences.sort(key=lambda x: x[1], reverse=True)
+            if start_price < 200:
+                movers.append((symbol, difference))
 
-        # Log the top 5 differences
-        if differences:
-            logging.info("Top 5 stocks with the highest differences:")
-            for i in range(min(5, len(differences))):
-                stock, difference = differences[i]
-                logging.info(f'{stock} - Difference: {difference}')
-                stockList.append(stock)
-        else:
-            logging.info('No differences found.')
+        # Sort by price movement (descending)
+        movers = [m for m in movers if m[1] > 0]
+        movers.sort(key=lambda x: x[1], reverse=True)
+
+        logging.info("Top 5 movers (last hour):")
+        for symbol, diff in movers[:5]:
+            logging.info(f"{symbol} - Moved: {diff}")
+            stockList.append(symbol)
 
         logging.info("Stock list generated successfully")
+
     except Exception as e:
         logging.error(f"Error in getAllTrades: {str(e)}")
 
     return stockList
+
 
 
 
@@ -154,9 +200,10 @@ def main():
         
         
         logging.info(f"------------------------------------------------------------\n\n")
-        login()
+        #login()
         
-        while datetime.now().hour < 12:
+        while datetime.now().hour < 15:
+            logging.info(f" time is {datetime.now()}")
             
             topTrade = getAllTrades(args.group)
             logging.info(f"these are the stocks we are trading{topTrade}")
