@@ -12,6 +12,11 @@ import time
 import requests
 import os
 
+now = datetime.now()
+current_date = now.strftime("%Y-%m-%d")
+logging.basicConfig(filename=f'logs/{current_date}-generator.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+logging.info(f"-------------------------------------------------------------------------------------------------\n\n")
 
 
 def get_parameter_value(parameter_name):
@@ -136,7 +141,7 @@ def update_price_data(symbol: str, api_key: str,
     """
 
     # Decide on the CSV file name for this symbol
-    csv_filename = f"{symbol}_prices.csv"
+    csv_filename = f"data/{symbol}_prices.csv"
 
     # We'll track the earliest date we need to fetch. 
     # If CSV exists, read it and find the latest date we already have.
@@ -184,16 +189,24 @@ def update_price_data(symbol: str, api_key: str,
 
     logging.info(f"Fetching new data for {symbol} from {start_date} to {end_date}")
     response = requests.get(url, headers=headers)
+    #logging.info(response.json().get("prices"))
+    
     prices = response.json().get('prices', [])
 
-    # Convert the API response to a DataFrame
     df_new = pd.DataFrame(prices)
+
+    # If no new data was returned, just return existing
     if df_new.empty:
         logging.warning(f"No new data returned for {symbol}.")
-        return df_existing  # Return whatever we had
+        return df_existing
 
-    # Make sure timestamp is parsed and sorted
+    # Rename 'time' -> 'timestamp' so that df_new["timestamp"] doesn't fail
+    df_new.rename(columns={'time': 'timestamp'}, inplace=True)
+
+    # Convert the 'timestamp' column to a proper datetime
     df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
+
+    # Sort by timestamp
     df_new.sort_values("timestamp", inplace=True)
 
     # Merge df_existing and df_new, drop duplicates
@@ -206,6 +219,7 @@ def update_price_data(symbol: str, api_key: str,
     logging.info(f"Updated CSV saved: {csv_filename}")
 
     return df_updated
+
 
 
 def getAllTrades(group: str, finhub_key: str) -> list:
@@ -272,14 +286,10 @@ def main():
 
         args = parser.parse_args()
 
-        now = datetime.now()
-        current_date = now.strftime("%Y-%m-%d")
 
-        logging.basicConfig(filename=f'logs/{current_date}-generator.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+
         
         starthour = 9
-        logging.info(f"-------------------------------------------------------------------------------------------------\n\n")
         #login()
 
         # response = rh.markets.get_all_stocks_from_market_tag("technology")
