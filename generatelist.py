@@ -6,17 +6,23 @@ import logging
 from datetime import datetime, timedelta
 import time
 import argparse
-import boto3
 import logging
 import time
 import requests
 import os
+import json, re, sys
+from hashlib import md5
+from pathlib import Path
+import pandas as pd
+import requests
+import yfinance as yf
+import boto3
+import base64, getpass, os, random, uuid, time, sys, requests
+from pathlib import Path
+from typing import Dict
 
-now = datetime.now()
-current_date = now.strftime("%Y-%m-%d")
-logging.basicConfig(filename=f'logs/{current_date}-generator.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-logging.info(f"-------------------------------------------------------------------------------------------------\n\n")
+
+
 
 
 def get_parameter_value(parameter_name):
@@ -33,26 +39,122 @@ def get_parameter_value(parameter_name):
         return None
 
     except Exception as e:
-        print(f"Error occurred: {str(e)}")
+        print(f"Error occurred in getting parameters: {str(e)}")
         return None
 
-finhub_key = get_parameter_value("finhub_api_key")
-BASE_URL = "https://finnhub.io/api/v1"
 
-CATEGORY_MAP = {
-    "technology": [
-        "AAPL", "MSFT", "GOOGL", "NVDA", "AMD", "INTC", "META", "CRM", "ADBE", "TSLA",
-        "AVGO", "ORCL", "QCOM", "CSCO", "IBM", "SHOP", "PLTR", "SNOW", "UBER", "TWLO",
-        "NET", "NOW", "TEAM", "SQ", "ROKU"
-    ],
-    "biopharmaceutical": [
-        "AMGN", "GILD", "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "SAGE", "IONS", "ALNY",
-        "NBIX", "BLUE", "ARNA", "ABBV", "PFE", "LLY", "AZN", "NVS", "JNJ", "SNY",
-        "VRTX", "BMY", "ZNTL", "NKTR", "XLRN"
-    ]
+
+
+# ── constants ────────────────────────────────────────────────────────────────
+CLIENT_ID     = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"   # mobile/web
+TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
+CHALLENGE_URL = "https://api.robinhood.com/challenge/{id}/respond/"
+
+CACHE_FILE = Path.home() / ".robinhood_token.json"
+HEADERS    = {
+    "Accept":          "application/json",
+    "Accept-Language": "en-US",
+    "User-Agent":      "Robinhood/10.0 (X11; Linux; Android 10)",
 }
 
-DAYCOUNT = 0
+# ── helpers ──────────────────────────────────────────────────────────────────
+def _b64(client_id: str) -> str:
+    return base64.b64encode(f"{client_id}:".encode()).decode()
+
+def _random_device_token() -> str:
+    return str(uuid.UUID(int=random.getrandbits(128)))
+
+def _load_cache() -> Dict:
+    if CACHE_FILE.exists():
+        return json.loads(CACHE_FILE.read_text())
+    return {}
+
+def _save_cache(tok: Dict):
+    CACHE_FILE.write_text(json.dumps(tok, indent=2))
+    print(f"✓  stored token → {CACHE_FILE}")
+
+def _expired(tok: Dict, buffer_sec=300) -> bool:
+    """Robinhood expires in ~3600 s.  Refresh 5 min early."""
+    return time.time() > tok["created_at"] + tok["expires_in"] - buffer_sec
+
+# ── core flows ───────────────────────────────────────────────────────────────
+def _perform_token_request(payload: Dict, extra_headers: Dict = None) -> Dict:
+    h = HEADERS | {
+        "Authorization": f"Basic {_b64(CLIENT_ID)}",
+        "Content-Type":  "application/x-www-form-urlencoded",
+    } | (extra_headers or {})
+    r = requests.post(TOKEN_URL, data=payload, headers=h, timeout=30)
+    if r.status_code == 200:
+        return r.json()
+    raise RuntimeError(f"Token request failed: {r.text}")
+
+def initial_login():
+    user = get_parameter_value('/robinhood/username')
+    pw = get_parameter_value('/robinhood/password')
+    mfa  = os.getenv("RH_MFA")  # optional 6‑digit MFA code
+    dev  = os.getenv("RH_DEVICE_TOKEN") or _random_device_token()
+
+    base_payload = {
+        "grant_type":   "password",
+        "scope":        "internal",
+        "client_id":    CLIENT_ID,
+        "device_token": dev,
+        "username":     user,
+        "password":     pw,
+        "expires_in":   86400,          # 1 day; access_token itself lasts 1 h
+        "challenge_type": "sms",
+    }
+    if mfa:
+        base_payload["mfa_code"] = mfa
+
+    try:
+        tok = _perform_token_request(base_payload)
+    except RuntimeError as err:
+        data = err.args[0]
+        # MFA / challenge flow
+        if "challenge" in data:
+            ch_id = json.loads(data)["challenge"]["id"]
+            code  = input("SMS/Email code from Robinhood: ")
+            requests.post(
+                CHALLENGE_URL.format(id=ch_id),
+                headers=HEADERS,
+                json={"response": code},
+                timeout=15,
+            )
+            tok = _perform_token_request(base_payload, {"X-ROBINHOOD-CHALLENGE-RESPONSE-ID": ch_id})
+        else:
+            raise
+
+    tok["created_at"] = int(time.time())
+    _save_cache(tok)
+    return tok
+
+def refresh_token(tok: Dict):
+    payload = {
+        "grant_type":    "refresh_token",
+        "refresh_token": tok["refresh_token"],
+        "client_id":     CLIENT_ID,
+        "scope":         "internal",
+    }
+    new_tok = _perform_token_request(payload)
+    new_tok["created_at"] = int(time.time())
+    _save_cache(new_tok)
+    return new_tok
+
+# ── entry point ──────────────────────────────────────────────────────────────
+def get_access_token() -> str:
+    tok = _load_cache()
+    if not tok:
+        tok = initial_login()
+    elif _expired(tok):
+        print("Refreshing expired token …")
+        tok = refresh_token(tok)
+    else:
+        print("Token still valid.")
+    return tok["access_token"]
+
+
+
 
 
 
@@ -277,7 +379,14 @@ def getAllTrades(group: str, finhub_key: str) -> list:
 
 def main():
     try:
-        # Update argument parser to include user_id
+        
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
+        logging.basicConfig(filename=f'logs/{current_date}-generator.log', level=logging.INFO,
+                            format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+        logging.info(f"-------------------------------------------------------------------------------------------------\n\n")
         parser = argparse.ArgumentParser(description='Trading bot configuration')
         parser.add_argument('-g', '--group', type=str, required=True, 
                           help='The group of stocks to trade (biopharmaceutical, upcoming-earnings, most-popular-under-25, technology)')
@@ -285,8 +394,26 @@ def main():
        
 
         args = parser.parse_args()
+        print("\n✅  Access token:", get_access_token())
+
+        finhub_key = get_parameter_value("finhub_api_key")
+        BASE_URL = "https://finnhub.io/api/v1"
+
+        CATEGORY_MAP = {
+            "technology": [
+                "AAPL", "MSFT", "GOOGL", "NVDA", "AMD", "INTC", "META", "CRM", "ADBE", "TSLA",
+                "AVGO", "ORCL", "QCOM", "CSCO", "IBM", "SHOP", "PLTR", "SNOW", "UBER", "TWLO",
+                "NET", "NOW", "TEAM", "SQ", "ROKU"
+            ],
+            "biopharmaceutical": [
+                "AMGN", "GILD", "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "SAGE", "IONS", "ALNY",
+                "NBIX", "BLUE", "ARNA", "ABBV", "PFE", "LLY", "AZN", "NVS", "JNJ", "SNY",
+                "VRTX", "BMY", "ZNTL", "NKTR", "XLRN"
+            ]
+        }
 
 
+        DAYCOUNT = 0
 
         
         starthour = 9
@@ -341,7 +468,7 @@ def main():
                         file.write(f"{stock_id},")
             time.sleep(2)
     except Exception as e:
-        logging.error(f"Login failed: {str(e)}")
+        logging.error(f"Tradinng bot generator failed: {str(e)}")
         return False
        
 
