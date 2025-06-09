@@ -1,155 +1,140 @@
-import csv
-import urllib.request
-import datetime
-import pandas as pd
-import time
-from datetime import timedelta
-from matplotlib import pyplot as plt
-import numpy as np
 import logging
+from pathlib import Path
+from typing import Tuple, Union
+
+import numpy as np
+import pandas as pd
+from keras import layers
 from keras.models import Sequential
 from keras.optimizers import Adam
-from keras import layers
+from matplotlib import pyplot as plt
 
 
-FINNHUB_API_KEY = "your_finnhub_api_key"
+# --------------------------------------------------------------------------- #
+# Utility helpers                                                             #
+# --------------------------------------------------------------------------- #
+def _load_csv_data(symbol: str,
+                   base_dir: Union[str, Path] = "data") -> pd.DataFrame:
+    csv_path = Path(base_dir) / f"{symbol}_prices.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"{csv_path} not found—place your CSV there.")
 
-def download_csv(stock, days=100):
-    logging.info(f"Downloading CSV data for {stock} using Finnhub")
+    df = pd.read_csv(csv_path, usecols=["timestamp", "close"])
+    df.rename(columns={"timestamp": "Date", "close": "Close"}, inplace=True)
+    df["Date"] = pd.to_datetime(df["Date"], utc=True)
 
-    now = datetime.datetime.now()
-    start_date = now - datetime.timedelta(days=days)
-    start_timestamp = int(start_date.timestamp())
-    end_timestamp = int(now.timestamp())
+    # --- NEW: force numeric & drop bad rows ---------------------------------
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    df = df[np.isfinite(df["Close"])]        # drops NaN, inf, -inf
 
-    url = f"https://finnhub.io/api/v1/stock/candle"
-    params = {
-        "symbol": stock,
-        "resolution": "D",  # Daily
-        "from": start_timestamp,
-        "to": end_timestamp,
-        "token": FINNHUB_API_KEY
-    }
+    if len(df) < 4:                          # need ≥ n+1 rows (n = 3)
+        raise ValueError(f"Not enough clean data in {csv_path}")
 
-    response = requests.get(url, params=params)
-    data = response.json()
+    df.sort_values("Date", inplace=True)
+    df.set_index("Date", inplace=True)
+    df = df[~df.index.duplicated(keep="last")]
+    return df
 
-    if data.get("s") != "ok":
-        logging.error(f"Failed to download data for {stock}: {data}")
-        return
 
-    df = pd.DataFrame({
-        "timestamp": [datetime.datetime.fromtimestamp(ts) for ts in data["t"]],
-        "open": data["o"],
-        "high": data["h"],
-        "low": data["l"],
-        "close": data["c"],
-        "volume": data["v"]
-    })
+def _df_to_windowed_df(df: pd.DataFrame, n: int = 3) -> pd.DataFrame:
+    """Convert a price series to an n‑step windowed DataFrame (supervised format)."""
+    dates, X, Y = [], [], []
+    for i in range(n, len(df)):
+        window = df.iloc[i - n:i]["Close"].to_numpy()
+        target = df.iloc[i]["Close"]
+        dates.append(df.index[i])
+        X.append(window)
+        Y.append(target)
 
-    df.to_csv(f"{stock}.csv", index=False)
-    logging.info(f"Downloaded CSV data for {stock}")
-
-def str_to_datetime(s):
-    split = s.split('-')
-    year, month, day = int(split[0]), int(split[1]), int(split[2])
-    return datetime.datetime(year=year, month=month, day=day)
-
-def df_to_windowed_df(dataframe, n=3):
-    logging.info("Converting DataFrame to windowed DataFrame")
-    
-    dates = []
-    X, Y = [], []
-
-    for i in range(n, len(dataframe)):
-        x = dataframe.iloc[i-n:i]['Close'].to_numpy()
-        y = dataframe.iloc[i]['Close']
-        
-        dates.append(dataframe.index[i])
-        X.append(x)
-        Y.append(y)
-    
-    ret_df = pd.DataFrame({})
-    ret_df['Target Date'] = dates
     X = np.array(X)
-    
-    for i in range(0, n):
-        ret_df[f'Target-{n-i}'] = X[:, i]
-    
-    ret_df['Target'] = Y
-    
-    logging.info("Converted DataFrame to windowed DataFrame")
-    return ret_df
+    out = pd.DataFrame({"Target Date": dates, "Target": Y})
+    for i in range(n):
+        out[f"Target-{n - i}"] = X[:, i]
+    return out
 
-def windowed_df_to_date_X_y(windowed_dataframe):
-    logging.info("Converting windowed DataFrame to X and Y datasets")
-    
-    df_as_np = windowed_dataframe.to_numpy()
 
-    dates = df_as_np[:, 0]
+def _windowed_df_to_date_X_y(
+        windowed_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split the windowed DataFrame into date, X, y numpy arrays."""
+    arr = windowed_df.to_numpy()
+    dates = arr[:, 0]
+    X = arr[:, 2:].astype(np.float32).reshape((len(dates), -1, 1))  # (m, n, 1)
+    y = arr[:, 1].astype(np.float32)
+    return dates, X, y
 
-    middle_matrix = df_as_np[:, 1:-1]
-    X = middle_matrix.reshape((len(dates), middle_matrix.shape[1], 1))
 
-    Y = df_as_np[:, -1]
+# --------------------------------------------------------------------------- #
+# Public API                                                                  #
+# --------------------------------------------------------------------------- #
+def run_lstm(symbol: str,
+             base_dir: Union[str, Path] = "data",
+             *,
+             epochs: int = 100,
+             show_plot: bool = True) -> float:
+    """
+    Train a 3‑step‑look‑back LSTM on close prices in `data/<SYMBOL>.csv`
+    and return the predicted next close price.
+    """
+    logging.info("Loading CSV for %s", symbol)
+    df = _load_csv_data(symbol, base_dir)
 
-    logging.info("Converted windowed DataFrame to X and Y datasets")
-    return dates, X.astype(np.float32), Y.astype(np.float32)
+    logging.info("Preparing windowed dataset")
+    wdf = _df_to_windowed_df(df, n=3)
+    dates, X, y = _windowed_df_to_date_X_y(wdf)
 
-def run_lstm(stock):
-    logging.info(f"Running LSTM model for {stock}")
-    
-    download_csv(stock, days=100)
+    # Train/val/test split (80 / 10 / 10)
+    q80, q90 = int(0.8 * len(X)), int(0.9 * len(X))
+    X_train, y_train = X[:q80], y[:q80]
+    X_val, y_val = X[q80:q90], y[q80:q90]
+    X_test, y_test = X[q90:], y[q90:]
 
-    df = pd.read_csv(f'{stock}.csv')
-    df = df[['Date', 'Close']]
-    df['Date'] = df['Date'].apply(str_to_datetime)
-    df.index = df.pop('Date')
-
-    windowed_df = df_to_windowed_df(df, n=3)
-    dates, X, y = windowed_df_to_date_X_y(windowed_df)
-
-    q_80 = int(len(dates) * .8)
-    q_90 = int(len(dates) * .9)
-
-    dates_train, X_train, y_train = dates[:q_80], X[:q_80], y[:q_80]
-    dates_val, X_val, y_val = dates[q_80:q_90], X[q_80:q_90], y[q_80:q_90]
-    dates_test, X_test, y_test = dates[q_90:], X[q_90:], y[q_90:]
-
-    model = Sequential([layers.Input((3, 1)),
-                        layers.LSTM(64),
-                        layers.Dense(32, activation='relu'),
-                        layers.Dense(32, activation='relu'),
-                        layers.Dense(1)])
-
-    model.compile(loss='mse', 
+    model = Sequential([
+        layers.Input((3, 1)),
+        layers.LSTM(64),
+        layers.Dense(32, activation='relu'),
+        layers.Dense(32, activation='relu'),
+        layers.Dense(1),
+    ])
+    model.compile(loss='mse',
                   optimizer=Adam(learning_rate=0.001),
                   metrics=['mean_absolute_error'])
 
-    logging.info("Training LSTM model")
-    model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=100)
-    logging.info("Completed training LSTM model")
+    logging.info("Training LSTM (%d training samples)", len(X_train))
+    model.fit(X_train, y_train,
+              validation_data=(X_val, y_val),
+              epochs=epochs, verbose=0)
+    logging.info("Training complete – MAE on test: %.4f",
+                 model.evaluate(X_test, y_test, verbose=0)[1])
 
-    latest_data = df.tail(3)['Close'].to_numpy().reshape((1, 3, 1)).astype(np.float32)
-    predicted_price = model.predict(latest_data)
+    # Predict the next close
+    latest_window = df["Close"].tail(3).to_numpy().reshape((1, 3, 1)).astype(np.float32)
+    predicted_price = float(model.predict(latest_window, verbose=0)[0][0])
 
-    now = datetime.datetime.now()
-    today = now.strftime("%Y-%m-%d")
-
-    logging.info(f"Predicted end-of-day price for {today}: {predicted_price[0][0]}")
-
-    df.loc[now] = predicted_price[0][0]
+    # Build & save chart every time
+    next_ts = df.index[-1] + pd.Timedelta(days=1)
+    df_plot = df.copy()
+    df_plot.loc[next_ts] = predicted_price
 
     plt.figure(figsize=(10, 6))
-    plt.plot(df.index[:-1], df['Close'][:-1], label='Historical Prices')
-    plt.plot(df.index[-2:], df['Close'][-2:], 'r--', label=f'Predicted Price for {today}')
-    plt.xlabel('Date')
-    plt.ylabel('Close Price')
-    plt.title(f"{stock} Stock Price Prediction for {today}")
-    plt.legend()
+    plt.plot(df_plot.index[:-1], df_plot["Close"][:-1], label="Historical Prices")
+    plt.plot(df_plot.index[-2:], df_plot["Close"][-2:], "r--",
+             label=f"Predicted ({next_ts.date()})")
+    plt.title(f"{symbol} – next‑day close prediction")
+    plt.xlabel("Date")
+    plt.ylabel("Close Price")
     plt.grid(True)
-    plt.ion()
-    plt.show()
-    
-    logging.info(f"Plotted the stock price prediction for {stock}")
-    return predicted_price[0][0]
+    plt.legend()
+    plt.tight_layout()
+
+    out_dir = Path("stock_graph")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{symbol}.png"
+    plt.savefig(out_file, dpi=300, bbox_inches="tight")
+    logging.info("Saved plot to %s", out_file)
+
+    if show_plot:
+        plt.show()
+    plt.close()
+
+    logging.info("Predicted next close for %s: %.2f", symbol, predicted_price)
+    return predicted_price

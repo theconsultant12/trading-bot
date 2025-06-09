@@ -21,7 +21,39 @@ import base64, getpass, os, random, uuid, time, sys, requests
 from pathlib import Path
 from typing import Dict
 
+import os, logging, requests, pandas as pd
+from datetime import datetime, timedelta, timezone
 
+import os
+import logging
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Tuple
+
+import pandas as pd
+import requests
+from pandas.errors import EmptyDataError
+
+def get_top_52w_gainers(limit: int = 100, group: str = "52-week-gainers") -> list[str]:
+    """
+    DAY_GAINERS, DAY_LOSERS, MOST_ACTIVES
+    FIFTY_TWO_WK_GAINERS, FIFTY_TWO_WK_LOSERS UNUSUAL_VOLUME, MOST_SHORTED_STOCKS, TOP_VOLUME_ETFS
+    # filters exactly as you wrote them
+    most_actives = [
+        ["eq",   ["region",            "us"     ]],      # region = US
+        ["btwn", ["intradaymarketcap", 2e9, 1e11]],      # $2 B – $100 B
+        ["gt",   ["dayvolume",         5e6      ]]       # vol > 5 M
+    ]
+
+    resp = yf.screen(query=most_actives, count=25, sortField="dayvolume", sortType="desc")
+    tickers = [q["symbol"] for q in resp["quotes"]]
+    print(tickers)
+    """
+    resp = yf.screen("FIFTY_TWO_WK_GAINERS", count=100)   # ← returns JSON dict
+    tickers = [row["symbol"] for row in resp["quotes"]] 
+
+    
+    return tickers
 
 
 
@@ -41,120 +73,6 @@ def get_parameter_value(parameter_name):
     except Exception as e:
         print(f"Error occurred in getting parameters: {str(e)}")
         return None
-
-
-
-
-# ── constants ────────────────────────────────────────────────────────────────
-CLIENT_ID     = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"   # mobile/web
-TOKEN_URL     = "https://api.robinhood.com/oauth2/token/"
-CHALLENGE_URL = "https://api.robinhood.com/challenge/{id}/respond/"
-
-CACHE_FILE = Path.home() / ".robinhood_token.json"
-HEADERS    = {
-    "Accept":          "application/json",
-    "Accept-Language": "en-US",
-    "User-Agent":      "Robinhood/10.0 (X11; Linux; Android 10)",
-}
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-def _b64(client_id: str) -> str:
-    return base64.b64encode(f"{client_id}:".encode()).decode()
-
-def _random_device_token() -> str:
-    return str(uuid.UUID(int=random.getrandbits(128)))
-
-def _load_cache() -> Dict:
-    if CACHE_FILE.exists():
-        return json.loads(CACHE_FILE.read_text())
-    return {}
-
-def _save_cache(tok: Dict):
-    CACHE_FILE.write_text(json.dumps(tok, indent=2))
-    print(f"✓  stored token → {CACHE_FILE}")
-
-def _expired(tok: Dict, buffer_sec=300) -> bool:
-    """Robinhood expires in ~3600 s.  Refresh 5 min early."""
-    return time.time() > tok["created_at"] + tok["expires_in"] - buffer_sec
-
-# ── core flows ───────────────────────────────────────────────────────────────
-def _perform_token_request(payload: Dict, extra_headers: Dict = None) -> Dict:
-    h = HEADERS | {
-        "Authorization": f"Basic {_b64(CLIENT_ID)}",
-        "Content-Type":  "application/x-www-form-urlencoded",
-    } | (extra_headers or {})
-    r = requests.post(TOKEN_URL, data=payload, headers=h, timeout=30)
-    if r.status_code == 200:
-        return r.json()
-    raise RuntimeError(f"Token request failed: {r.text}")
-
-def initial_login():
-    user = get_parameter_value('/robinhood/username')
-    pw = get_parameter_value('/robinhood/password')
-    mfa  = os.getenv("RH_MFA")  # optional 6‑digit MFA code
-    dev  = os.getenv("RH_DEVICE_TOKEN") or _random_device_token()
-
-    base_payload = {
-        "grant_type":   "password",
-        "scope":        "internal",
-        "client_id":    CLIENT_ID,
-        "device_token": dev,
-        "username":     user,
-        "password":     pw,
-        "expires_in":   86400,          # 1 day; access_token itself lasts 1 h
-        "challenge_type": "sms",
-    }
-    if mfa:
-        base_payload["mfa_code"] = mfa
-
-    try:
-        tok = _perform_token_request(base_payload)
-    except RuntimeError as err:
-        data = err.args[0]
-        # MFA / challenge flow
-        if "challenge" in data:
-            ch_id = json.loads(data)["challenge"]["id"]
-            code  = input("SMS/Email code from Robinhood: ")
-            requests.post(
-                CHALLENGE_URL.format(id=ch_id),
-                headers=HEADERS,
-                json={"response": code},
-                timeout=15,
-            )
-            tok = _perform_token_request(base_payload, {"X-ROBINHOOD-CHALLENGE-RESPONSE-ID": ch_id})
-        else:
-            raise
-
-    tok["created_at"] = int(time.time())
-    _save_cache(tok)
-    return tok
-
-def refresh_token(tok: Dict):
-    payload = {
-        "grant_type":    "refresh_token",
-        "refresh_token": tok["refresh_token"],
-        "client_id":     CLIENT_ID,
-        "scope":         "internal",
-    }
-    new_tok = _perform_token_request(payload)
-    new_tok["created_at"] = int(time.time())
-    _save_cache(new_tok)
-    return new_tok
-
-# ── entry point ──────────────────────────────────────────────────────────────
-def get_access_token() -> str:
-    tok = _load_cache()
-    if not tok:
-        tok = initial_login()
-    elif _expired(tok):
-        print("Refreshing expired token …")
-        tok = refresh_token(tok)
-    else:
-        print("Token still valid.")
-    return tok["access_token"]
-
-
-
 
 
 
@@ -216,6 +134,7 @@ def get_parameter_value(parameter_name):
     ssm_client = boto3.client('ssm')
 
     try:
+        logging.info(f"getting parameter {parameter_name}")
         response = ssm_client.get_parameter(Name=parameter_name)
         return response['Parameter']['Value']
 
@@ -230,150 +149,234 @@ def get_parameter_value(parameter_name):
 
 
 
-def update_price_data(symbol: str, api_key: str, 
-                      interval='minute', interval_multiplier=5,
-                      lookback_days=3) -> pd.DataFrame:
-    logging.debug(f"Entering update_price_data function with parameters: symbol={symbol}, api_key={api_key}, interval={interval}, interval_multiplier={interval_multiplier}, lookback_days={lookback_days}")
+def update_price_data(
+    symbol: str,
+    alpaca_api_key: str,
+    alpaca_secret_key: str,
+    interval: str = "minute",          # timeframe unit
+    interval_multiplier: int = 15,     # e.g. 15‑minute candles
+    lookback_days: int = 7,            # how far back on first run
+    limit: int = 1000,
+) -> Tuple[pd.DataFrame, float, float]:
     """
-    For a given symbol, read the existing CSV (if it exists), figure out the last date
-    for which data is stored, and fetch only new data from the API. Merge, deduplicate,
-    and save back to CSV.
+    Fetch new OHLCV bars for *symbol* from Alpaca, merge with data/<SYMBOL>_prices.csv,
+    deduplicate, resave, and return:
 
-    Returns a DataFrame with the updated data.
+        (df_updated, lowest_price, highest_price)
+
+    • Uses Alpaca’s native column names: c, h, l, n, o, v, vw
+    • lowest/highest are computed over the last *lookback_days*.
     """
 
-    # Decide on the CSV file name for this symbol
-    csv_filename = f"data/{symbol}_prices.csv"
+    # ---- 1. Build Alpaca timeframe string (“15Min” etc.) --------------------
+    UNIT_MAP = {
+        "minute": "Min", "min": "Min", "t": "T",
+        "hour":   "Hour", "h": "H",
+        "day":    "Day",  "d": "D",
+        "week":   "Week", "w": "W",
+        "month":  "Month", "m": "M",
+    }
+    if interval.lower() not in UNIT_MAP:
+        raise ValueError(f"Unsupported interval: {interval}")
+    timeframe = f"{interval_multiplier}{UNIT_MAP[interval.lower()]}"  # “15Min”
 
-    # We'll track the earliest date we need to fetch. 
-    # If CSV exists, read it and find the latest date we already have.
-    if os.path.exists(csv_filename):
-        logging.info(f"checking  if {symbol} csv file exists")
-        df_existing = pd.read_csv(csv_filename, parse_dates=["timestamp"])
+    # ---- 2. Determine start date -------------------------------------------
+    csv_path = Path("data") / f"{symbol}_prices.csv"
+    try:
+        df_existing = pd.read_csv(csv_path, parse_dates=["timestamp"])
         df_existing.sort_values("timestamp", inplace=True)
-
         last_date = df_existing["timestamp"].max().date()
-        logging.info(f"Existing data found for {symbol}. Last date in CSV: {last_date}")
+        start_dt = datetime.combine(
+            last_date + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+    except (FileNotFoundError, EmptyDataError):
+        df_existing = pd.DataFrame()
+        start_dt = (
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=lookback_days)
+        )
 
-        # We'll fetch from the day after the last known date
-        # so we don't double-download duplicates
-        start_date = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
+    end_dt = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    start_iso, end_iso = (
+        start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
 
-        # If the last_date is already today or in the future, 
-        # no need to re-fetch
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        if start_date > today_str:
-            logging.info(f"No new data to fetch for {symbol}. Returning existing DataFrame.")
-            return df_existing
+    # ---- 3. Call Alpaca ------------------------------------------------------
+    url_base = (
+        "https://data.alpaca.markets/v2/stocks/bars"
+        f"?symbols={symbol}"
+        f"&timeframe={timeframe}"
+        f"&start={start_iso}"
+        f"&end={end_iso}"
+        f"&limit={limit}"
+        "&adjustment=raw&feed=sip&sort=asc"
+    )
+    headers = {
+        "accept": "application/json",
+        "APCA-API-KEY-ID": alpaca_api_key,
+        "APCA-API-SECRET-KEY": alpaca_secret_key,
+    }
 
+    all_new_bars, next_page = [], None
+    while True:
+        url = url_base + (f"&page_token={next_page}" if next_page else "")
+        payload = requests.get(url, headers=headers, timeout=30).json()
+        all_new_bars.extend(payload.get("bars", {}).get(symbol, []))
+        next_page = payload.get("next_page_token")
+        if not next_page:
+            break
+
+    # ---- 4. Combine ----------------------------------------------------------
+    if all_new_bars:
+        df_new = pd.DataFrame(all_new_bars).rename(columns={"t": "timestamp"})
+        df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
+        df_new.sort_values("timestamp", inplace=True)
+
+        df_updated = (
+            pd.concat([df_existing, df_new], ignore_index=True)
+            .drop_duplicates(subset=["timestamp"])
+            .sort_values("timestamp")
+        )
     else:
-        # If no CSV exists, fetch 'lookback_days' from today by default
-        logging.info(f"No existing data for {symbol}, fetching entire range.")
-        start_date = (datetime.now() - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
-        df_existing = pd.DataFrame()  # empty placeholder
+        logging.info("No new bars returned by Alpaca")
+        df_updated = df_existing
 
-    # We'll fetch up to "today"
-    end_date = datetime.now().strftime('%Y-%m-%d')
+    # ---- 5. Save -------------------------------------------------------------
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df_updated.to_csv(csv_path, index=False)
+    logging.info("Saved updated data to %s", csv_path)
 
-    # Build the request URL to financialdatasets.ai (as in your code):
+    # ---- 6. Compute low/high over recent window -----------------------------
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    recent = df_updated[df_updated["timestamp"] >= cutoff]
+
+    lowest_price = float(recent["l"].min()) if not recent.empty else float("nan")
+    highest_price = float(recent["h"].max()) if not recent.empty else float("nan")
+
+    logging.info(
+        "%s range over last %d days: %.2f ↔ %.2f",
+        symbol, lookback_days, lowest_price, highest_price,
+    )
+
+    return df_updated, lowest_price, highest_price
+
+
+
+
+def getAllTrades(
+    group: str,
+    alpaca_api_key: str,
+    alpaca_secret_key: str,
+    *,
+    interval: str = "minute",
+    interval_multiplier: int = 5,
+    lookback_hours: int = 36,
+) -> list[str]:
+    """
+    Return a list of the top‑moving tickers (price < $200) within *group*
+    over the last `lookback_hours` (default: 1 hour), ranked by the absolute
+    move between the first open and last close in that window.
+
+    Bars are pulled in 5‑minute buckets via update_price_data().
+    """
+    movers: list[tuple[str, float]] = []
+    stockList: list[str] = []
+
+    logging.info("Calculating top movers over the last %d hours", lookback_hours)
+
+    tickers = get_top_52w_gainers(limit=100, group=group)
+    if not tickers:
+        logging.warning("No tickers found for category '%s'", group)
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+
+    for symbol in tickers:
+        try:
+            # pull / update 5‑minute bars for this symb
+            df, week_low, week_high = update_price_data(
+                symbol,
+                alpaca_api_key,
+                alpaca_secret_key,
+                interval=interval,
+                interval_multiplier=interval_multiplier,
+                lookback_days=1,      # just in case no CSV exists yet
+            )
+
+            if df.empty:
+                logging.warning("No data for %s", symbol)
+                continue
+
+            # keep only bars within the look‑back window
+            df_recent = df[df["timestamp"] >= cutoff]
+            if df_recent.empty:
+                logging.info("%s has no bars in the last %d hours", symbol, lookback_hours)
+                continue
+
+            # Alpaca columns:  o (open)  c (close)
+            start_price = df_recent.iloc[0]["o"]
+            end_price   = df_recent.iloc[-1]["c"]
+            movement    = abs(end_price - start_price)
+
+            logging.debug(
+                "%s — start: %.2f  end: %.2f  move: %.2f",
+                symbol, start_price, end_price, movement
+            )
+
+            if start_price < 200 and movement > 0:
+                movers.append((symbol, movement))
+
+        except Exception as exc:
+            logging.error("getAllTrades: error processing %s — %s", symbol, exc)
+
+    # rank by movement, descending
+    movers.sort(key=lambda x: x[1], reverse=True)
+
+    for sym, diff in movers[:5]:      # top 5
+        logging.info("%s moved %.2f", sym, diff)
+        stockList.append(sym)
+
+    return stockList
+
+import requests
+from typing import List, Dict
+
+def get_latest_prices(
+    symbols: List[str],
+    alpaca_api_key: str,
+    alpaca_secret_key: str,
+    timeout: int = 10
+) -> Dict[str, float]:
+    """
+    Fetch the latest bar for each symbol from Alpaca and return a
+    dict of {ticker: latest_close_price}.
+    """
+    # Build query string (Alpaca accepts comma‑separated list)
     url = (
-        f'https://api.financialdatasets.ai/prices/'
-        f'?ticker={symbol}'
-        f'&interval={interval}'
-        f'&interval_multiplier={interval_multiplier}'
-        f'&start_date={start_date}'
-        f'&end_date={end_date}'
+        "https://data.alpaca.markets/v2/stocks/bars/latest"
+        f"?symbols={','.join(symbols)}"
     )
 
     headers = {
-        "X-API-KEY": api_key
+        "accept": "application/json",
+        "APCA-API-KEY-ID": alpaca_api_key,
+        "APCA-API-SECRET-KEY": alpaca_secret_key,
     }
 
-    logging.info(f"Fetching new data for {symbol} from {start_date} to {end_date}")
-    response = requests.get(url, headers=headers)
-    #logging.info(response.json().get("prices"))
-    
-    prices = response.json().get('prices', [])
+    response = requests.get(url, headers=headers, timeout=timeout)
+    response.raise_for_status()          # raises on HTTP errors
 
-    df_new = pd.DataFrame(prices)
+    bars = response.json().get("bars", {})
+    # Extract the `"c"` (close) price for each ticker
+    latest_prices = {ticker: info["c"] for ticker, info in bars.items()}
 
-    # If no new data was returned, just return existing
-    if df_new.empty:
-        logging.warning(f"No new data returned for {symbol}.")
-        return df_existing
-
-    # Rename 'time' -> 'timestamp' so that df_new["timestamp"] doesn't fail
-    df_new.rename(columns={'time': 'timestamp'}, inplace=True)
-
-    # Convert the 'timestamp' column to a proper datetime
-    df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
-
-    # Sort by timestamp
-    df_new.sort_values("timestamp", inplace=True)
-
-    # Merge df_existing and df_new, drop duplicates
-    df_updated = pd.concat([df_existing, df_new], ignore_index=True)
-    df_updated.drop_duplicates(subset=['timestamp'], inplace=True)
-    df_updated.sort_values('timestamp', inplace=True)
-
-    # Write back to CSV
-    df_updated.to_csv(csv_filename, index=False)
-    logging.info(f"Updated CSV saved: {csv_filename}")
-
-    return df_updated
-
-
-
-def getAllTrades(group: str, finhub_key: str) -> list:
-    stockList = []
-    movers = []
-
-    logging.info("Getting top movers over the last hour using Finnhub historical data")
-
-    tickers = CATEGORY_MAP.get(group, [])
-    if not tickers:
-        logging.warning(f"No tickers found for category '{group}'")
-        return []
-
-    try:
-        for symbol in tickers:
-            # -- USE THE HELPER FUNCTION HERE --
-            # This will read existing CSV (if present),
-            # and only fetch new data from the last known timestamp
-            df_prices = update_price_data(symbol, finhub_key)
-
-            if df_prices.empty:
-                logging.warning(f"No data returned or stored for symbol: {symbol}")
-                continue
-
-            # Start price = first row’s open, End price = last row’s close
-            start_price = df_prices.iloc[0]['open']
-            end_price   = df_prices.iloc[-1]['close']
-            difference  = abs(end_price - start_price)
-
-            logging.info(f"Symbol: {symbol}, "
-                         f"Start Price: {start_price}, "
-                         f"End Price: {end_price}, "
-                         f"Difference: {difference}")
-
-            if start_price < 200:
-                movers.append((symbol, difference))
-
-        # Sort by price movement (descending)
-        movers = [m for m in movers if m[1] > 0]
-        movers.sort(key=lambda x: x[1], reverse=True)
-
-        logging.info("Top 5 movers (last hour):")
-        for symbol, diff in movers[:5]:
-            logging.info(f"{symbol} - Moved: {diff}")
-            stockList.append(symbol)
-
-        logging.info("Stock list generated successfully")
-
-    except Exception as e:
-        logging.error(f"Error in getAllTrades: {str(e)}")
-
-    return stockList
+    return latest_prices
 
 
 
@@ -394,26 +397,16 @@ def main():
        
 
         args = parser.parse_args()
-        print("\n✅  Access token:", get_access_token())
+        logging.info(f"args are {args}")
+        logging.info(f"getting alpaca api key")
+        alpaca_api_key = get_parameter_value("/alpaca/key")
+        logging.info(f"getting alpaca secret key")
+        alpaca_secret_key = get_parameter_value("/alpaca/secret")
+        
+        
 
         finhub_key = get_parameter_value("finhub_api_key")
-        BASE_URL = "https://finnhub.io/api/v1"
-
-        CATEGORY_MAP = {
-            "technology": [
-                "AAPL", "MSFT", "GOOGL", "NVDA", "AMD", "INTC", "META", "CRM", "ADBE", "TSLA",
-                "AVGO", "ORCL", "QCOM", "CSCO", "IBM", "SHOP", "PLTR", "SNOW", "UBER", "TWLO",
-                "NET", "NOW", "TEAM", "SQ", "ROKU"
-            ],
-            "biopharmaceutical": [
-                "AMGN", "GILD", "BIIB", "VRTX", "REGN", "MRNA", "BNTX", "SAGE", "IONS", "ALNY",
-                "NBIX", "BLUE", "ARNA", "ABBV", "PFE", "LLY", "AZN", "NVS", "JNJ", "SNY",
-                "VRTX", "BMY", "ZNTL", "NKTR", "XLRN"
-            ]
-        }
-
-
-        DAYCOUNT = 0
+    
 
         
         starthour = 9
@@ -424,21 +417,27 @@ def main():
         logging.info(f"time now is {datetime.now()}")
         if datetime.now().hour > starthour:
             logging.info(f"time now is {datetime.now()} and past the market start time running this in dry run")
-            sampleTrade = getAllTrades(args.group, finhub_key)
+            sampleTrade = getAllTrades(args.group, alpaca_api_key, alpaca_secret_key, lookback_hours=360)
             logging.info(f"these are the stocks we are trading{sampleTrade}")
             #run_lstm("NVDA")
             for stock_id in sampleTrade:
-                latest_price = float(rh.stocks.get_latest_price(stock_id)[0])
-                predicted_price = run_lstm(stock_id, latest_price)
+                latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
+                predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
                 
-                if latest_price > predicted_price:
+                if latest_price.get(stock_id) > predicted_price:
                     logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
-                data = rh.stocks.get_stock_historicals(stock_id,interval="10minute", span="week")
-                lowest_price = min(float(entry['low_price']) for entry in data)
-                highest_price = min(float(entry['high_price']) for entry in data)
-                if latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
+                    continue
+                df, week_low, week_high = update_price_data(
+                stock_id,
+                alpaca_api_key=alpaca_api_key,
+                alpaca_secret_key=alpaca_secret_key,
+                interval="minute",
+                interval_multiplier=15,
+                lookback_days=7,
+                )            
+                if latest_price < (0.1 * (week_high - week_low)) + week_low:
                     logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
-                if latest_price < predicted_price and latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
+                if latest_price < predicted_price and latest_price < (0.1 * (week_high - week_low)) + week_low:
                     logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
                     logging.info(f"writing the stock {stock_id} into a csv")
                     with open(f'{current_date}-list.txt', 'a') as file:
@@ -447,21 +446,27 @@ def main():
         while datetime.now().hour < starthour:
             logging.info(f" time is {datetime.now()}")
             
-            sampleTrade = getAllTrades(args.group, finhub_key)
+            sampleTrade = getAllTrades(args.group, alpaca_api_key, alpaca_secret_key)
             logging.info(f"these are the stocks we are trading{sampleTrade}")
             #run_lstm("NVDA")
             for stock_id in sampleTrade:
-                latest_price = float(rh.stocks.get_latest_price(stock_id)[0])
-                predicted_price = run_lstm(stock_id, latest_price)
+                latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
+                predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
                 
-                if latest_price > predicted_price:
+                if latest_price.get(stock_id) > predicted_price:
                     logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
-                data = rh.stocks.get_stock_historicals(stock_id,interval="10minute", span="week")
-                lowest_price = min(float(entry['low_price']) for entry in data)
-                highest_price = min(float(entry['high_price']) for entry in data)
-                if latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
+                    continue
+                df, week_low, week_high = update_price_data(
+                stock_id,
+                alpaca_api_key=alpaca_api_key,
+                alpaca_secret_key=alpaca_secret_key,
+                interval="minute",
+                interval_multiplier=15,
+                lookback_days=7,
+                )    
+                if latest_price < (0.1 * (week_high - week_low)) + week_low:
                     logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
-                if latest_price < predicted_price and latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
+                if latest_price < predicted_price and latest_price < (0.1 * (week_high - week_low)) + week_low:
                     logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
                     logging.info(f"writing the stock {stock_id} into a csv")
                     with open(f'{current_date}-list.txt', 'a') as file:
