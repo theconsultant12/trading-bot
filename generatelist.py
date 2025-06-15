@@ -19,7 +19,7 @@ import yfinance as yf
 import boto3
 import base64, getpass, os, random, uuid, time, sys, requests
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import os, logging, requests, pandas as pd
 from datetime import datetime, timedelta, timezone
@@ -234,7 +234,7 @@ def update_price_data(
 
     # ---- 4. Combine ----------------------------------------------------------
     if all_new_bars:
-        df_new = pd.DataFrame(all_new_bars).rename(columns={"t": "timestamp"})
+        df_new = pd.DataFrame(all_new_bars).rename(columns={"t": "timestamp", "c": "close", "o": "open", "h": "high", "l": "low", "v": "volume", "vw": "volume_weighted_average_price"})
         df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
         df_new.sort_values("timestamp", inplace=True)
 
@@ -248,9 +248,13 @@ def update_price_data(
         df_updated = df_existing
 
     # ---- 5. Save -------------------------------------------------------------
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    df_updated.to_csv(csv_path, index=False)
-    logging.info("Saved updated data to %s", csv_path)
+    # ---- 5. Save -------------------------------------------------------------
+    if not all_new_bars:
+        logging.info("No new bars returned by Alpaca, skipping file write")
+    else:
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df_updated.to_csv(csv_path, index=False)
+        logging.info("Saved updated data to %s", csv_path)
 
     # ---- 6. Compute low/high over recent window -----------------------------
     cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
@@ -276,76 +280,73 @@ def getAllTrades(
     *,
     interval: str = "minute",
     interval_multiplier: int = 5,
-    lookback_hours: int = 36,
+    lookback_days_for_range: int = 7, # Changed this to be explicit about the lookback for high/low
 ) -> list[str]:
     """
-    Return a list of the top‑moving tickers (price < $200) within *group*
-    over the last `lookback_hours` (default: 1 hour), ranked by the absolute
-    move between the first open and last close in that window.
+    Return a list of the top 20 tickers (price < $200) within *group*
+    ranked by the difference between their 7-day high and 7-day low price.
 
     Bars are pulled in 5‑minute buckets via update_price_data().
     """
     movers: list[tuple[str, float]] = []
     stockList: list[str] = []
 
-    logging.info("Calculating top movers over the last %d hours", lookback_hours)
+    logging.info("Calculating top movers based on %d-day price range", lookback_days_for_range)
 
     tickers = get_top_52w_gainers(limit=100, group=group)
     if not tickers:
         logging.warning("No tickers found for category '%s'", group)
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-
     for symbol in tickers:
         try:
             # pull / update 5‑minute bars for this symb
+            # week_low and week_high are computed over lookback_days (default 7 in update_price_data)
+            # The previous 'lookback_days=1' was just for ensuring CSV existence, not for the range calculation
+            # We explicitly pass lookback_days_for_range to update_price_data for the range calculation.
             df, week_low, week_high = update_price_data(
                 symbol,
                 alpaca_api_key,
                 alpaca_secret_key,
                 interval=interval,
                 interval_multiplier=interval_multiplier,
-                lookback_days=1,      # just in case no CSV exists yet
+                lookback_days=lookback_days_for_range,
             )
 
             if df.empty:
                 logging.warning("No data for %s", symbol)
                 continue
 
-            # keep only bars within the look‑back window
-            df_recent = df[df["timestamp"] >= cutoff]
-            if df_recent.empty:
-                logging.info("%s has no bars in the last %d hours", symbol, lookback_hours)
+            # Check if the highest price in the range is under $200
+            # This retains the spirit of "under 200" but applies it to the recent high.
+            if pd.isna(week_high) or week_high >= 200:
+                logging.info(f"{symbol} (High: {week_high:.2f}) is not under $200 or has no valid high/low. Skipping.")
                 continue
 
-            # Alpaca columns:  o (open)  c (close)
-            start_price = df_recent.iloc[0]["o"]
-            end_price   = df_recent.iloc[-1]["c"]
-            movement    = abs(end_price - start_price)
-
-            logging.debug(
-                "%s — start: %.2f  end: %.2f  move: %.2f",
-                symbol, start_price, end_price, movement
-            )
-
-            if start_price < 200 and movement > 0:
-                movers.append((symbol, movement))
+            price_range = week_high - week_low
+            
+            if price_range > 0: # Ensure there's actual movement
+                movers.append((symbol, price_range))
+                logging.debug(
+                    "%s — %d-day low: %.2f  high: %.2f  range: %.2f",
+                    symbol, lookback_days_for_range, week_low, week_high, price_range
+                )
 
         except Exception as exc:
             logging.error("getAllTrades: error processing %s — %s", symbol, exc)
 
-    # rank by movement, descending
+    # rank by price range, descending
     movers.sort(key=lambda x: x[1], reverse=True)
 
-    for sym, diff in movers[:5]:      # top 5
-        logging.info("%s moved %.2f", sym, diff)
+    # Return top 20 symbols
+    for sym, diff in movers[:20]:
+        logging.info("%s 7-day price range: %.2f", sym, diff)
         stockList.append(sym)
 
     return stockList
+    
 
-import requests
-from typing import List, Dict
+
 
 def get_latest_prices(
     symbols: List[str],
@@ -417,7 +418,7 @@ def main():
         logging.info(f"time now is {datetime.now()}")
         if datetime.now().hour > starthour:
             logging.info(f"time now is {datetime.now()} and past the market start time running this in dry run")
-            sampleTrade = getAllTrades(args.group, alpaca_api_key, alpaca_secret_key, lookback_hours=360)
+            sampleTrade = getAllTrades(args.group, alpaca_api_key, alpaca_secret_key)
             logging.info(f"these are the stocks we are trading{sampleTrade}")
             #run_lstm("NVDA")
             for stock_id in sampleTrade:
