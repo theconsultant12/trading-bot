@@ -7,13 +7,13 @@ import logging
 import os
 import argparse
 import boto3
-from predict_stock import run_lstm
-from predict_stock_granular import run_lstm_granular
+from generatelist import get_latest_prices, get_parameter_value 
 import pandas as pd
 import atexit
 import signal
 import json
 from decimal import Decimal
+import requests
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -40,167 +40,127 @@ def create_pid_file(pid_file):
         f.write(str(pid))  # Write PID to the file
 
 
-def get_parameter_value(parameter_name):
+def get_current_balance(alpaca_api_key, alpaca_secret_key, timeout = 10) -> float:
+    url = (
+        "https://paper-api.alpaca.markets/v2/account"
+    )
 
-    ssm_client = boto3.client('ssm')
+    headers = {
+        "accept": "application/json",
+        "APCA-API-KEY-ID": alpaca_api_key,
+        "APCA-API-SECRET-KEY": alpaca_secret_key,
+    }
 
+    logging.info(f"Fetching current balance from Alpaca API")
     try:
-        response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
+        response = requests.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()          # raises on HTTP errors
 
-    except ssm_client.exceptions.ParameterNotFound:
-        print(f"Parameter '{parameter_name}' not found.")
-        return None
-
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        return None
-
-
-
-
-def login():
-    """Login using stored token or notify if reauth needed"""
-    try:
-        username = get_parameter_value('/robinhood/username')
-        password = get_parameter_value('/robinhood/password')
-            # Try to use existing token
-        response = rh.authentication.login(
-            username=username,
-            password=password,
-            expiresIn=3600*24,
-            scope='internal',
-            store_session=True,
-            mfa_code=None,
-        )
-        logging.info("Login successful using stored token")
-        return True
-
+        price = response.json().get("cash")
+        logging.info(f"Successfully retrieved balance: ${float(price):.2f}")
         
-    except Exception as e:
-        logging.error(f"Login failed: {str(e)}")
-        return False
+        return float(price)  # Convert string to float before returning
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error fetching balance from Alpaca API: {str(e)}")
+        raise
+    except (ValueError, TypeError) as e:
+        logging.error(f"Error parsing balance response: {str(e)}")
+        raise
 
-def canWeTrade(minimumBalance, maximumBalance) -> bool:
-    """ here we check how much is available in the trading account and we start trading if we are less than 1100 and higher than 500"""
-    trade = False
-    global DAYCOUNT 
-    try:
-        withdrawable = float(rh.profiles.load_account_profile().get('portfolio_cash'))
-        DAYCOUNT += 1
-        if withdrawable > minimumBalance and withdrawable < maximumBalance:
-            trade = True
-            logging.info(f"your withdrawable balance is: {withdrawable}")
-        else:
-            trade = False   
-            logging.info(f"we can no longer trade. your balance is either greate than {minimumBalance} or higher than the {maximumBalance} \n your spending balance is {withdrawable}")
-    except Exception as e:
-        logging.error(f"Error in canWeTrade: {str(e)}")
-        
+
+
+def canWeTrade(
+    min_balance,
+    max_balance,
+    alpaca_api_key: str,
+    alpaca_secret_key: str,
+    timeout: int = 10
+) -> bool:
+    """
+    Fetch the latest bar for each symbol from Alpaca and return a
+    dict of {ticker: latest_close_price}.
+    """
+    logging.info(f"Checking if we can trade with balance limits: min=${min_balance}, max=${max_balance}")
+    # Build query string (Alpaca accepts comma‑separated list)
+    price = get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+    # Extract the `"c"` (close) price for each ticker
+    if min_balance < price and max_balance > price:
+        trade = True
+        logging.info(f"Trading allowed: Current balance ${price:.2f} is within limits")
+    else:
+        trade = False
+        logging.info(f"Trading not allowed: Current balance ${price:.2f} is outside limits (min=${min_balance}, max=${max_balance})")
+
     return trade
 
 
 
 
-def getAllTrades(group) -> list:
-    """Here we get the stocks that exist under the category tag
-    ‘biopharmaceutical’, ‘upcoming-earnings’, ‘most-popular-under-25’, ‘technology’"""
-    global DAYCOUNT 
-    count = 0
-    min_max_values = {}
-    stockArray = []
-    stockList = []
-    logging.info("getting all top moving trades in the past 40 seconds")
-
-    try:
-        while count < 10:
-            response = rh.markets.get_all_stocks_from_market_tag(group)
-            DAYCOUNT += 1
-            for stock in response[:500]:
-                if float(stock.get("ask_price")) < 200:
-                    stockArray.append({stock.get("symbol"): stock.get("ask_price")})
-
-            for stock in stockArray:
-                for key, value in stock.items():
-                    value = float(value)
-                    if key in min_max_values:
-                        if value < min_max_values[key]['min']:
-                            min_max_values[key]['min'] = value
-                        if value > min_max_values[key]['max']:
-                            min_max_values[key]['max'] = value
-                    else:
-                        min_max_values[key] = {'min': value, 'max': value}
-            count += 1
-
-        # Calculate the differences and store them in a list of tuples
-        differences = [(stock, values['max'] - values['min']) for stock, values in min_max_values.items()]
-
-        # Filter out stocks with no difference
-        differences = [item for item in differences if item[1] != 0]
-
-        # Sort the list by the differences in descending order
-        differences.sort(key=lambda x: x[1], reverse=True)
-
-        # Log the top 5 differences
-        if differences:
-            logging.info("Top 5 stocks with the highest differences:")
-            for i in range(min(5, len(differences))):
-                stock, difference = differences[i]
-                logging.info(f'{stock} - Difference: {difference}')
-                stockList.append(stock)
-        else:
-            logging.info('No differences found.')
-
-        logging.info("Stock list generated successfully")
-    except Exception as e:
-        logging.error(f"Error in getAllTrades: {str(e)}")
-
-    return stockList
-
-
-
-def getWeightedAverage(stock):
-    data = rh.stocks.get_stock_historicals(stock,interval="10minute", span="day")
-        
-    data_hour = data[-10:]
-    combined = data + data_hour
-
-    df = pd.DataFrame(combined)
-    
-    # Convert prices to numeric values
-    df['open_price'] = pd.to_numeric(df['open_price'])
-    df['close_price'] = pd.to_numeric(df['close_price'])
-    df['high_price'] = pd.to_numeric(df['high_price'])
-    df['low_price'] = pd.to_numeric(df['low_price'])
-
-
-    avg_open = df['open_price'].mean()
-    avg_close = df['close_price'].mean()
-    # avg_high = df['high_price'].mean()
-    # avg_low = df['low_price'].mean()
-    dayaverage = (avg_open + avg_close)/2 
-    return(dayaverage)
-
-
-
-
-def monitorBuy(stock, dry, user_id) -> int:
+def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
     global DAYCOUNT 
     try:
 
-        average = getWeightedAverage(stock)
+        average = get_latest_prices([stock],alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         # we are trying to spend a reasonable amount per stock buy
-        logging.info(average)
+        logging.info(f"current price of {stock} is {average.get(stock)}")
         quantity = int(500/average)
         count = 0
         if dry:
-            costBuy = rh.stocks.get_latest_price(stock)[0]
+
+
+            url = "https://paper-api.alpaca.markets/v2/orders"
+
+            payload = {
+                "type": "market",
+                "time_in_force": "day",
+                "symbol": stock,
+                "qty": quantity,
+                "side": "buy"
+            }
+            headers = {
+                "accept": "application/json",
+                "content-type": "application/json",
+                "APCA-API-KEY-ID": alpaca_api_key,
+                "APCA-API-SECRET-KEY": alpaca_secret_key
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+
+            print(response.text)
+            response.raise_for_status()          # raises on HTTP errors
+
+            quantity = response.json().get("filled_qty", {})
+            price = response.json().get("filled_avg_price", {})
+            costBuy = float(price) * float(quantity)
             record_transaction(user_id, stock, 'buy', costBuy * quantity)
             logging.info(f"{costBuy}stock bought at {costBuy}  without checking")
         else:
-            buyprice = rh.orders.order_buy_market(stock, quantity)  
+            url = "https://api.alpaca.markets/v2/orders"
+
+            payload = {
+                "type": "market",
+                "time_in_force": "day",
+                "symbol": stock,
+                "qty": quantity,
+                "side": "buy"
+            }
+            headers = {
+                "accept": "application/json",
+                "content-type": "application/json",
+                "APCA-API-KEY-ID": alpaca_api_key,
+                "APCA-API-SECRET-KEY": alpaca_secret_key
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+
+            print(response.text)
+            response.raise_for_status()          # raises on HTTP errors
+
+            quantity = response.json().get("filled_qty", {})
+            price = response.json().get("filled_avg_price", {})
+            buyprice = float(price) * float(quantity)
             record_transaction(user_id, stock, 'buy', buyprice * quantity)
             logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
         time.sleep(10)
@@ -215,12 +175,58 @@ def monitorBuy(stock, dry, user_id) -> int:
                 time.sleep(60)
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
         if dry:
-            costSell = rh.stocks.get_latest_price(stock)[0]
+            url = "https://paper-api.alpaca.markets/v2/orders"
+
+            payload = {
+                "type": "market",
+                "time_in_force": "day",
+                "symbol": stock,
+                "qty": quantity,
+                "side": "sell"
+            }
+            headers = {
+                "accept": "application/json",
+                "content-type": "application/json",
+                "APCA-API-KEY-ID": alpaca_api_key,
+                "APCA-API-SECRET-KEY": alpaca_secret_key
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+
+            print(response.text)
+            response.raise_for_status()          # raises on HTTP errors
+
+            quantity = response.json().get("filled_qty", {})
+            price = response.json().get("filled_avg_price", {})
+            costSell = float(price) * float(quantity)
             logging.info(f"stock sold at {costSell} after checking {count} times")
             record_transaction(user_id, stock, 'sell', costSell * quantity)
             return float(costSell) - float(costBuy)
         else: 
-            sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
+            url = "https://api.alpaca.markets/v2/orders"
+
+            payload = {
+                "type": "market",
+                "time_in_force": "day",
+                "symbol": stock,
+                "qty": quantity,
+                "side": "sell"
+            }
+            headers = {
+                "accept": "application/json",
+                "content-type": "application/json",
+                "APCA-API-KEY-ID": alpaca_api_key,
+                "APCA-API-SECRET-KEY": alpaca_secret_key
+            }
+
+            response = requests.post(url, json=payload, headers=headers)
+
+            print(response.text)
+            response.raise_for_status()          # raises on HTTP errors
+
+            quantity = response.json().get("filled_qty", {})
+            price = response.json().get("filled_avg_price", {})
+            sellprice = float(price) * float(quantity)
             record_transaction(user_id, stock, 'sell', sellprice * quantity)
             logging.info(f"stock sold at {sellprice} after checking {count} times") 
        
@@ -232,71 +238,7 @@ def monitorBuy(stock, dry, user_id) -> int:
     return diff
 
 
-# def monitorBuyCrypto(crypto, dry, user_id) -> int:
-#     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
-#     prices = []
-#     global DAYCOUNT 
-#     try:
 
-#         average = getWeightedAverage(crypto)
-#         # we are trying to spend a reasonable amount per stock buy
-#         logging.info(average)
-#         quantity = int(500/average)
-#         count = 0
-#         logging.info(f"waiting for price to drop. average is {average} current price is {rh.stocks.get_latest_price(crypto)[0]}")
-#         while float(rh.stocks.get_latest_price(crypto)[0]) > average - (average * 0.0012):
-#             count += 1
-#             DAYCOUNT += 1
-#             time.sleep(2)
-#             if count%49 == 0:
-#                 time.sleep(60)
-#         if dry:
-#             costBuy = rh.stocks.get_latest_price(stock)[0]
-#             record_transaction(user_id, stock, 'buy', costBuy * quantity)
-#             logging.info(f"{costBuy}stock bought at {costBuy}  after checking {count} times")
-#         else:
-#             buyprice = rh.orders.order_buy_market(stock, quantity)  
-#             record_transaction(user_id, stock, 'buy', buyprice * quantity)
-#             logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
-#         time.sleep(10)
-        
-#         count = 0
-#         logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average}")
-#         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
-#             count += 1
-#             DAYCOUNT += 1
-#             time.sleep(2)
-#             if count%49 == 0:
-#                 time.sleep(60)
-#         # sellprice = rh.orders.order_sell_market(stock, quantity) 
-#         if dry:
-#             costSell = rh.stocks.get_latest_price(stock)[0]
-#             logging.info(f"stock sold at {costSell} after checking {count} times")
-#             record_transaction(user_id, stock, 'sell', costSell * quantity)
-#             return float(costSell) - float(costBuy)
-#         else: 
-#             sellprice = rh.orders.order(symbol=stock, quantity=quantity, side='sell')
-#             record_transaction(user_id, stock, 'sell', sellprice * quantity)
-#             logging.info(f"stock sold at {sellprice} after checking {count} times") 
-       
-#         diff = (sellprice * quantity) - (buyprice * quantity)
-#         logging.info(f'we made {diff} on this sale')
-#     except Exception as e:
-#         logging.error(f"Error in monitorBuy: {str(e)}")
-#         diff = 0
-#     return diff
-
-
-#get total portfolio data
-
-def getCurrentBalance():
-    global DAYCOUNT 
-    DAYCOUNT += 1
-    try:
-        return float(rh.profiles.load_portfolio_profile().get('withdrawable_amount'))
-    except Exception as e:
-        logging.error(f"Error in getCurrentBalance: {str(e)}")
-        return 0.0
 
 def record_transaction(user_id, stock, type, cost):
     try:
@@ -429,17 +371,38 @@ def cleanup():
 # Register cleanup functions
 
 
+def read_stocks_to_trade(current_date: str) -> list[str]:
+    """
+    Read the stocks to trade from the date-stocks-to-trade.csv file.
+    Returns a list of stock symbols.
+    """
+    try:
+        file_path = f'{current_date}-stocks-to-trade.csv'
+        with open(file_path, 'r') as file:
+            content = file.read().strip()
+            if content:
+                # Split by comma and remove any empty strings
+                stocks = [stock.strip() for stock in content.split(',') if stock.strip()]
+                logging.info(f"Successfully read {len(stocks)} stocks from {file_path}")
+                return stocks
+            else:
+                logging.warning(f"No stocks found in {file_path}")
+                return []
+    except FileNotFoundError:
+        logging.error(f"File {file_path} not found")
+        return []
+    except Exception as e:
+        logging.error(f"Error reading stocks from {file_path}: {str(e)}")
+        return []
+
+
 def main():
     try:
         # Update argument parser to include user_id
         parser = argparse.ArgumentParser(description='Trading bot configuration')
-        parser.add_argument('-g', '--group', type=str, required=True, 
-                          help='The group of stocks to trade (biopharmaceutical, upcoming-earnings, most-popular-under-25, technology)')
-        parser.add_argument('-m', '--mode', type=str, required=True, 
-                          help='Granularity of the LSTM machine learning predictive algorithm')
-        parser.add_argument('-d', '--dry_run', type=str, required=True, 
+        parser.add_argument('-d', '--dry_run', type=str, required=False, 
                           help='Run the bot without using money')
-        parser.add_argument('-u', '--user_id', type=str, required=True, 
+        parser.add_argument('-u', '--user_id', type=str, required=False, 
                           help='Unique identifier for the user')
 
         args = parser.parse_args()
@@ -454,11 +417,21 @@ def main():
         create_pid_file(pid_file_path)
         logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
         atexit.register(cleanup)
-        u = get_parameter_value('/robinhood/username')
-        p = get_parameter_value('/robinhood/password')
-        login()
-        startBalance = getCurrentBalance()
+
+        logging.info(f"getting alpaca api key")
+        alpaca_api_key = get_parameter_value("/alpaca/key")
+        logging.info(f"getting alpaca secret key")
+        alpaca_secret_key = get_parameter_value("/alpaca/secret")
+        
+        startBalance = get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         estimatedProfitorLoss = 0
+
+        # Read stocks to trade from file
+        topTrade = read_stocks_to_trade(current_date)
+        if not topTrade:
+            logging.error("No stocks to trade found. Exiting.")
+            return
+
         #####################################################
         ## TEST SUITE
         #####################################################
@@ -476,51 +449,26 @@ def main():
         # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
   
         
-        while canWeTrade(0, 2000) == True and startBalance - getCurrentBalance() < 50 and DAYCOUNT <= DAILYAPILIMIT:
-            topTrade = getAllTrades(args.group)
-            logging.info(f"these are the stocks we are trading{topTrade}")
-            #run_lstm("NVDA")
+        while canWeTrade(min_balance=0, max_balance=2000,alpaca_api_key=alpaca_api_key,alpaca_secret_key=alpaca_secret_key) == True and DAYCOUNT <= DAILYAPILIMIT:
+
+            logging.info(f"These are the stocks we are trading{topTrade}")
             for stock_id in topTrade:
-                if args.mode == "granular":
-                    latest_price = float(rh.stocks.get_latest_price(stock_id)[0])
-                    predicted_price = run_lstm_granular(stock_id, latest_price)
-                    
-                    if latest_price > predicted_price:
-                        logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
-                    data = rh.stocks.get_stock_historicals(stock_id,interval="10minute", span="week")
-                    lowest_price = min(float(entry['low_price']) for entry in data)
-                    highest_price = min(float(entry['high_price']) for entry in data)
-                    if latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
-                        logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
-                    if latest_price < predicted_price and latest_price < (0.1 * (highest_price - lowest_price)) + lowest_price:
-                        logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
-                        logging.info(f"trading {stock_id}")
-                        diff = monitorBuy(stock_id, args.dry_run, args.user_id)
-                        estimatedProfitorLoss += diff
-                        time.sleep(10)
-                else:
-                    latest_price = float(rh.stocks.get_latest_price(stock_id)[0])
-                    predicted_price = run_lstm(stock_id, latest_price)
-                    
-                    if latest_price > predicted_price:
-                        logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
-                    if latest_price < predicted_price:
-                        logging.info(f"Predicted price of {stock_id} is greater than latest price. we will trade this")
-                        logging.info(f"trading {stock_id}")
-                        diff = monitorBuy(stock_id, args.dry_run, args.user_id)
-                        estimatedProfitorLoss += diff
-                        time.sleep(10)
+                logging.info(f"trading {stock_id}")
+                diff = monitorBuy(stock_id, args.dry_run, args.user_id, alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+                estimatedProfitorLoss += diff
+                time.sleep(10)
+                
             time.sleep(20)
 
         if DAYCOUNT >= DAILYAPILIMIT:
             reason = "daily api limit reached"  
             logging.info(reason)  
-        if startBalance - getCurrentBalance() - startBalance == 500:
+        if startBalance - get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)- startBalance == 500:
             
             reason = "we lost 50 dollars already during today's trade"  
             logging.info(reason)    
               
-        endBalance = getCurrentBalance()
+        endBalance = get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         
         if endBalance > startBalance:
             word = "PROFIT"
