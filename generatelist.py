@@ -192,7 +192,7 @@ def update_price_data(
         df_new.sort_values("timestamp", inplace=True)
 
         # Normalize Alpaca columns
-        RENAME = {"open": "o", "high": "h", "low": "l", "close": "c", "volume": "v"}
+        RENAME = {"o": "o", "h": "h", "l": "l", "c": "c", "v": "v"}
         df_new.rename(columns={k: v for k, v in RENAME.items() if k in df_new.columns}, inplace=True)
 
         # Merge
@@ -224,8 +224,9 @@ def update_price_data(
     logging.info("Cutoff: %s", cutoff)
 
     try:
-        lowest_price = float(recent["low"].min()) if "low" in recent.columns and not recent.empty else float("nan")
-        highest_price = float(recent["high"].max()) if "high" in recent.columns and not recent.empty else float("nan")
+
+        lowest_price = float(recent["l"].min()) if "l" in recent.columns and not recent.empty else float("nan")
+        highest_price = float(recent["h"].max()) if "h" in recent.columns and not recent.empty else float("nan")
     except Exception as e:
         logging.error("Error calculating high/low for %s: %s", symbol, e)
         lowest_price, highest_price = float("nan"), float("nan")
@@ -339,6 +340,38 @@ def get_latest_prices(
     return latest_prices
 
 
+def load_config(config_path: str = "parameters.config") -> dict:
+    """
+    Loads a config file with key=value pairs (ignoring comments and blank lines),
+    assigns variables to the values, and returns a dictionary of the config.
+    """
+    config = {}
+    if not os.path.exists(config_path):
+        logging.warning(f"Config file {config_path} not found.")
+        return config
+    with open(config_path, 'r') as f:
+        for line in f:
+            # Remove comments and strip whitespace
+            line = line.split('#', 1)[0].strip()
+            if not line:
+                continue
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                # Try to convert to int or float if possible
+                if value.isdigit():
+                    value = int(value)
+                else:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        pass
+                config[key] = value
+                # Assign variable in local scope (not global)
+                locals()[key] = value
+    return config
+
 
 def main():
     try:
@@ -364,8 +397,12 @@ def main():
         alpaca_secret_key = get_parameter_value("/alpaca/secret")
         
         
+        config = load_config()
+        for key, value in config.items():
+            globals()[key] = value
+    
 
-        finhub_key = get_parameter_value("finhub_api_key")
+
     
 
         
@@ -400,7 +437,7 @@ def main():
                 if latest_price.get(stock_id) < predicted_price and latest_price.get(stock_id) < (0.1 * (week_high - week_low)) + week_low:
                     logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
                     logging.info(f"writing the stock {stock_id} into a csv")
-                    with open(f'{current_date}-list.txt', 'a') as file:
+                    with open(f'{current_date}-stocks-to-trade.csv', 'a') as file:
                         file.write(f"{stock_id},")
             time.sleep(2)
         while datetime.now().hour < starthour:

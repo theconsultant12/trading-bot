@@ -105,7 +105,9 @@ def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         average = get_latest_prices([stock],alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         # we are trying to spend a reasonable amount per stock buy
         logging.info(f"current price of {stock} is {average.get(stock)}")
-        quantity = int(500/average)
+        quantity = int(500/average.get(stock))
+        print(f"here are the secrets{alpaca_secret_key}, {alpaca_api_key}", alpaca_api_key)
+
         count = 0
         if dry:
 
@@ -127,6 +129,7 @@ def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
             }
 
             response = requests.post(url, json=payload, headers=headers)
+            print(f"here are the secrets{alpaca_secret_key}, {alpaca_api_key}", alpaca_api_key)
 
             print(response.text)
             response.raise_for_status()          # raises on HTTP errors
@@ -192,6 +195,7 @@ def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
             }
 
             response = requests.post(url, json=payload, headers=headers)
+            print("here are the secrets",alpaca_secret_key, alpaca_api_key)
 
             print(response.text)
             response.raise_for_status()          # raises on HTTP errors
@@ -220,7 +224,6 @@ def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
             }
 
             response = requests.post(url, json=payload, headers=headers)
-
             print(response.text)
             response.raise_for_status()          # raises on HTTP errors
 
@@ -371,11 +374,13 @@ def cleanup():
 # Register cleanup functions
 
 
-def read_stocks_to_trade(current_date: str) -> list[str]:
+def read_stocks_to_trade() -> list[str]:
     """
     Read the stocks to trade from the date-stocks-to-trade.csv file.
     Returns a list of stock symbols.
     """
+    now = datetime.now()
+    current_date = now.strftime("%Y-%m-%d")
     try:
         file_path = f'{current_date}-stocks-to-trade.csv'
         with open(file_path, 'r') as file:
@@ -427,7 +432,7 @@ def main():
         estimatedProfitorLoss = 0
 
         # Read stocks to trade from file
-        topTrade = read_stocks_to_trade(current_date)
+        topTrade = read_stocks_to_trade()
         if not topTrade:
             logging.error("No stocks to trade found. Exiting.")
             return
@@ -449,12 +454,12 @@ def main():
         # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
   
         
-        while canWeTrade(min_balance=0, max_balance=2000,alpaca_api_key=alpaca_api_key,alpaca_secret_key=alpaca_secret_key) == True and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(min_balance=0, max_balance=100000,alpaca_api_key=alpaca_api_key,alpaca_secret_key=alpaca_secret_key) == True and DAYCOUNT <= DAILYAPILIMIT:
 
             logging.info(f"These are the stocks we are trading{topTrade}")
             for stock_id in topTrade:
                 logging.info(f"trading {stock_id}")
-                diff = monitorBuy(stock_id, args.dry_run, args.user_id, alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+                diff = monitorBuy(stock_id, True, args.user_id, alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
                 estimatedProfitorLoss += diff
                 time.sleep(10)
                 

@@ -19,8 +19,8 @@ def _load_csv_data(symbol: str,
     if not csv_path.exists():
         raise FileNotFoundError(f"{csv_path} not found—place your CSV there.")
 
-    df = pd.read_csv(csv_path, usecols=["timestamp", "close"])
-    df.rename(columns={"timestamp": "Date", "close": "Close"}, inplace=True)
+    df = pd.read_csv(csv_path, usecols=["timestamp", "c"])
+    df.rename(columns={"timestamp": "Date", "c": "Close"}, inplace=True)
     df["Date"] = pd.to_datetime(df["Date"], utc=True)
 
     # --- NEW: force numeric & drop bad rows ---------------------------------
