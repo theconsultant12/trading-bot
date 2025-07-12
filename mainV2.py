@@ -14,6 +14,7 @@ import signal
 import json
 from decimal import Decimal
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -96,80 +97,48 @@ def canWeTrade(
 
 
 
-def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
+def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
     global DAYCOUNT 
     try:
 
-        average = get_latest_prices([stock],alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+        average = get_latest_prices(stocks,alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         # we are trying to spend a reasonable amount per stock buy
-        logging.info(f"current price of {stock} is {average.get(stock)}")
-        quantity = int(500/average.get(stock))
-        print(f"here are the secrets{alpaca_secret_key}, {alpaca_api_key}", alpaca_api_key)
+        logging.info(f"current price of {stocks} is {average.get(stocks)}")
+        logging.info(type(average.get(stock)))
 
-        count = 0
-        if dry:
+        quantity = 2
 
+        results = {}
 
-            url = "https://paper-api.alpaca.markets/v2/orders"
+        def run_buy(stock):
+            return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
 
-            payload = {
-                "type": "market",
-                "time_in_force": "day",
-                "symbol": stock,
-                "qty": quantity,
-                "side": "buy"
-            }
-            headers = {
-                "accept": "application/json",
-                "content-type": "application/json",
-                "APCA-API-KEY-ID": alpaca_api_key,
-                "APCA-API-SECRET-KEY": alpaca_secret_key
-            }
+        with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
+            futures = {executor.submit(run_buy, stock): stock for stock in stocks}
+            for future in as_completed(futures):
+                stock, result = future.result()
+                results[stock] = result
 
-            response = requests.post(url, json=payload, headers=headers)
-            print(f"here are the secrets{alpaca_secret_key}, {alpaca_api_key}", alpaca_api_key)
+        results
 
-            print(response.text)
-            response.raise_for_status()          # raises on HTTP errors
+        total_cost = 0.0
+        for stock, result in results.items():
+            try:
+                price = float(result.get("filled_avg_price", 0))
+                qty = int(result.get("filled_qty", 0))
+                total_cost += price * qty
+            except (TypeError, ValueError):
+                continue 
 
-            quantity = response.json().get("filled_qty", {})
-            price = response.json().get("filled_avg_price", {})
-            costBuy = float(price) * float(quantity)
-            record_transaction(user_id, stock, 'buy', costBuy * quantity)
-            logging.info(f"{costBuy}stock bought at {costBuy}  without checking")
-        else:
-            url = "https://api.alpaca.markets/v2/orders"
-
-            payload = {
-                "type": "market",
-                "time_in_force": "day",
-                "symbol": stock,
-                "qty": quantity,
-                "side": "buy"
-            }
-            headers = {
-                "accept": "application/json",
-                "content-type": "application/json",
-                "APCA-API-KEY-ID": alpaca_api_key,
-                "APCA-API-SECRET-KEY": alpaca_secret_key
-            }
-
-            response = requests.post(url, json=payload, headers=headers)
-
-            print(response.text)
-            response.raise_for_status()          # raises on HTTP errors
-
-            quantity = response.json().get("filled_qty", {})
-            price = response.json().get("filled_avg_price", {})
-            buyprice = float(price) * float(quantity)
-            record_transaction(user_id, stock, 'buy', buyprice * quantity)
-            logging.info(f"{buyprice.get('quantity')}stock bought at {buyprice.get('price')}  after checking {count} times")
-        time.sleep(10)
+      
+        record_transaction(user_id, stock, 'buy', total_cost)
+        logging.info(f"{stocks} bought at {total_cost}  without checking")
+       
         
         count = 0
-        logging.info(f"waiting for price to rise current price is {rh.stocks.get_latest_price(stock)[0]} average is {average} buy price is {costBuy if dry else buyprice}")
+        logging.info(f"waiting for {stocks} price to rise current bought price is {total_cost}")
         while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
             count += 1
             DAYCOUNT += 1
@@ -239,6 +208,53 @@ def monitorBuy(stock, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         logging.error(f"Error in monitorBuy: {str(e)}")
         diff = 0
     return diff
+
+
+def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_run=True):
+    """
+    Places a market order (buy or sell) on Alpaca.
+    """
+    url = (
+        "https://paper-api.alpaca.markets/v2/orders"
+        if dry_run else
+        "https://api.alpaca.markets/v2/orders"
+    )
+
+    payload = {
+        "type": "market",
+        "time_in_force": "day",
+        "symbol": stock,
+        "qty": quantity,
+        "side": side  # "buy" or "sell"
+    }
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "APCA-API-KEY-ID": alpaca_api_key,
+        "APCA-API-SECRET-KEY": alpaca_secret_key
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        logging.info(f"{side.upper()} order for {stock} placed: {data}")
+        return {
+            "symbol": stock,
+            "side": side,
+            "filled_qty": data.get("filled_qty"),
+            "filled_avg_price": data.get("filled_avg_price"),
+            "status": data.get("status"),
+            "raw": data
+        }
+    except Exception as e:
+        logging.error(f"Failed to place {side} order for {stock}: {e}")
+        return {
+            "symbol": stock,
+            "side": side,
+            "error": str(e)
+        }
 
 
 
@@ -405,8 +421,7 @@ def main():
     try:
         # Update argument parser to include user_id
         parser = argparse.ArgumentParser(description='Trading bot configuration')
-        parser.add_argument('-d', '--dry_run', type=str, required=False, 
-                          help='Run the bot without using money')
+        parser.add_argument('-d', '--dry_run', action='store_true', default=True, help='Run the bot without using money')
         parser.add_argument('-u', '--user_id', type=str, required=False, 
                           help='Unique identifier for the user')
 
@@ -415,7 +430,7 @@ def main():
         now = datetime.now()
         current_date = now.strftime("%Y-%m-%d")
 
-        logging.basicConfig(filename=f'{args.user_id}-{current_date}app.log', level=logging.INFO,
+        logging.basicConfig(filename=f'logs/trading-bot-logs/{args.user_id}-{current_date}app.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
         
         pid_file_path = f'/tmp/{args.user_id}trading-bot-process.pid'
@@ -430,12 +445,13 @@ def main():
         
         startBalance = get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         estimatedProfitorLoss = 0
-
+        
         # Read stocks to trade from file
         topTrade = read_stocks_to_trade()
         if not topTrade:
             logging.error("No stocks to trade found. Exiting.")
             return
+        batch_size = 4 #len(topTrade)/3
 
         #####################################################
         ## TEST SUITE
@@ -457,9 +473,17 @@ def main():
         while canWeTrade(min_balance=0, max_balance=100000,alpaca_api_key=alpaca_api_key,alpaca_secret_key=alpaca_secret_key) == True and DAYCOUNT <= DAILYAPILIMIT:
 
             logging.info(f"These are the stocks we are trading{topTrade}")
-            for stock_id in topTrade:
-                logging.info(f"trading {stock_id}")
-                diff = monitorBuy(stock_id, True, args.user_id, alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+            
+            for i in range(0, len(topTrade), batch_size):
+                stock_ids = topTrade[i:i+batch_size]
+                logging.info(f"trading batch: {stock_ids}")
+                diff = monitorBuy(
+                    stock_ids,  # list of 4 tickers
+                    args.dry_run,
+                    args.user_id,
+                    alpaca_api_key=alpaca_api_key,
+                    alpaca_secret_key=alpaca_secret_key
+                )
                 estimatedProfitorLoss += diff
                 time.sleep(10)
                 

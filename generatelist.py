@@ -49,7 +49,7 @@ def get_top_52w_gainers(limit: int = 100, group: str = "52-week-gainers") -> lis
     tickers = [q["symbol"] for q in resp["quotes"]]
     print(tickers)
     """
-    resp = yf.screen("FIFTY_TWO_WK_GAINERS", count=100)   # ← returns JSON dict
+    resp = yf.screen(group, count=100)   # ← returns JSON dict
     tickers = [row["symbol"] for row in resp["quotes"]] 
 
     
@@ -378,19 +378,19 @@ def main():
         
         now = datetime.now()
         current_date = now.strftime("%Y-%m-%d")
-        logging.basicConfig(filename=f'logs/{current_date}-generator.log', level=logging.INFO,
+        logging.basicConfig(filename=f'logs/generator-logs/{current_date}-generator.log', level=logging.INFO,
                             format='%(asctime)s - %(levelname)s - %(message)s')
 
 
         logging.info(f"-------------------------------------------------------------------------------------------------\n\n")
-        parser = argparse.ArgumentParser(description='Trading bot configuration')
-        parser.add_argument('-g', '--group', type=str, required=True, 
-                          help='The group of stocks to trade (biopharmaceutical, upcoming-earnings, most-popular-under-25, technology)')
+        # parser = argparse.ArgumentParser(description='Trading bot configuration')
+        # parser.add_argument('-g', '--group', type=str, required=True, 
+        #                   help='The group of stocks to trade (DAY_GAINERS, DAY_LOSERS, MOST_ACTIVE, FIFTY_TWO_WK_GAINERS, FIFTY_TWO_WK_LOSERS UNUSUAL_VOLUME, MOST_SHORTED_STOCKS, TOP_VOLUME_ETFS)')
         
        
 
-        args = parser.parse_args()
-        logging.info(f"args are {args}")
+        
+        
         logging.info(f"getting alpaca api key")
         alpaca_api_key = get_parameter_value("/alpaca/key")
         logging.info(f"getting alpaca secret key")
@@ -404,7 +404,7 @@ def main():
 
 
     
-
+        groups = [ "FIFTY_TWO_WK_GAINERS", "DAY_GAINERS",  "UNUSUAL_VOLUME", "MOST_SHORTED_STOCKS", "TOP_VOLUME_ETFS"]
         
         starthour = 9
         #login()
@@ -412,63 +412,71 @@ def main():
         # response = rh.markets.get_all_stocks_from_market_tag("technology")
         # print(response)
         logging.info(f"time now is {datetime.now()}")
-        if datetime.now().hour > starthour:
-            logging.info(f"time now is {datetime.now()} and past the market start time running this in dry run")
-            sampleTrade = getAllTrades(args.group, alpaca_api_key, alpaca_secret_key)
-            logging.info(f"these are the stocks we are trading{sampleTrade}")
-            #run_lstm("NVDA")
-            for stock_id in sampleTrade:
-                latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
-                predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
-                
-                if latest_price.get(stock_id) > predicted_price:
-                    logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
-                    continue
-                df, week_low, week_high = update_price_data(
-                stock_id,
-                alpaca_api_key=alpaca_api_key,
-                alpaca_secret_key=alpaca_secret_key,
-                interval="minute",
-                interval_multiplier=15,
-                lookback_days=7,
-                )            
-                if latest_price.get(stock_id) < (0.1 * (week_high - week_low)) + week_low:
-                    logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
-                if latest_price.get(stock_id) < predicted_price and latest_price.get(stock_id) < (0.1 * (week_high - week_low)) + week_low:
-                    logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
-                    logging.info(f"writing the stock {stock_id} into a csv")
-                    with open(f'{current_date}-stocks-to-trade.csv', 'a') as file:
-                        file.write(f"{stock_id},")
-            time.sleep(2)
+        while datetime.now().hour > starthour:
+            for group in groups:
+                logging.info(f"gathering data from the {group}")
+                sampleTrade = getAllTrades(group, alpaca_api_key, alpaca_secret_key)
+                logging.info(f"these are the stocks we are trading{sampleTrade}")
+                #run_lstm("NVDA")
+                for stock_id in sampleTrade:
+                    latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
+                    predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
+                    
+                    if latest_price.get(stock_id) > predicted_price:
+                        logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
+                        continue
+                    df, week_low, week_high = update_price_data(
+                    stock_id,
+                    alpaca_api_key=alpaca_api_key,
+                    alpaca_secret_key=alpaca_secret_key,
+                    interval="minute",
+                    interval_multiplier=15,
+                    lookback_days=7,
+                    )            
+                    if latest_price.get(stock_id) < (0.5 * (week_high - week_low)) + week_low:
+                        logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
+                    if latest_price.get(stock_id) < predicted_price and latest_price.get(stock_id) < (0.4 * (week_high - week_low)) + week_low:
+                        logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
+                        logging.info(f"writing the stock {stock_id} into a csv")
+                        with open(f'{current_date}-stocks-to-trade.csv', 'a') as file:
+                            file.write(f"{stock_id},")
+
+                    time.sleep(10)
+
+                time.sleep(100)
+
+            time.sleep(100)
         while datetime.now().hour < starthour:
-            logging.info(f" time is {datetime.now()}")
+            for group in groups:
+                logging.info(f"gathering data from the {group}")
             
-            sampleTrade = getAllTrades(args.group, alpaca_api_key, alpaca_secret_key)
-            logging.info(f"these are the stocks we are trading{sampleTrade}")
-            #run_lstm("NVDA")
-            for stock_id in sampleTrade:
-                latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
-                predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
-                
-                if latest_price.get(stock_id) > predicted_price:
-                    logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
-                    continue
-                df, week_low, week_high = update_price_data(
-                stock_id,
-                alpaca_api_key=alpaca_api_key,
-                alpaca_secret_key=alpaca_secret_key,
-                interval="minute",
-                interval_multiplier=15,
-                lookback_days=7,
-                )    
-                if latest_price.get(stock_id) < (0.1 * (week_high - week_low)) + week_low:
-                    logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
-                if latest_price.get(stock_id) < predicted_price and latest_price < (0.1 * (week_high - week_low)) + week_low:
-                    logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
-                    logging.info(f"writing the stock {stock_id} into a csv")
-                    with open(f'{current_date}-stocks-to-trade.csv', 'a') as file:
-                        file.write(f"{stock_id},")
-            time.sleep(2)
+                sampleTrade = getAllTrades(group, alpaca_api_key, alpaca_secret_key)
+                logging.info(f"these are the stocks we are trading{sampleTrade}")
+                #run_lstm("NVDA")
+                for stock_id in sampleTrade:
+                    latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
+                    predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
+                    
+                    if latest_price.get(stock_id) > predicted_price:
+                        logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
+                        continue
+                    df, week_low, week_high = update_price_data(
+                    stock_id,
+                    alpaca_api_key=alpaca_api_key,
+                    alpaca_secret_key=alpaca_secret_key,
+                    interval="minute",
+                    interval_multiplier=15,
+                    lookback_days=7,
+                    )    
+                    if latest_price.get(stock_id) < (0.5 * (week_high - week_low)) + week_low:
+                        logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
+                    if latest_price.get(stock_id) < predicted_price and latest_price < (0.4 * (week_high - week_low)) + week_low:
+                        logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
+                        logging.info(f"writing the stock {stock_id} into a csv")
+                        with open(f'{current_date}-stocks-to-trade.csv', 'a') as file:
+                            file.write(f"{stock_id},")
+            
+            time.sleep(1000)
     except Exception as e:
         logging.error(f"Tradinng bot generator failed: {str(e)}")
         return False

@@ -11,18 +11,23 @@ import signal
 import time
 from openai import OpenAI
 import threading
-from mainV2 import  getCurrentBalance, login
+from mainV2 import  get_current_balance
 import logging
 import smtplib
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 import robin_stocks.robinhood as rh
 import pytz  # Add this import at the top
+import asyncio
+import websockets
+import json
+from typing import Set, List, Dict, Tuple
+
 
 
 now = datetime.now()
 current_date = now.strftime("%Y-%m-%d")
-logging.basicConfig(filename=f'{current_date}controller-logs.log', level=logging.INFO,
+logging.basicConfig(filename=f'logs/interactive-logs/{current_date}controller-logs.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 MODEL_PATH = os.path.join(os.path.abspath(os.getcwd()), "vosk-model-en-us-0.22")  
@@ -261,7 +266,7 @@ def analyze_logs(keyword, all_logs):
 
 
 
-def start_trading_bot(mode, group, dryrun, user_id):
+def start_trading_bot( dryrun, user_id):
     try:
         # Get the current directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -270,7 +275,7 @@ def start_trading_bot(mode, group, dryrun, user_id):
         bot_script_path = os.path.join(current_dir, 'mainV2.py')
         
         # Start the trading bot as a subprocess using python3
-        process = subprocess.Popen(['python3', bot_script_path, '-m', mode, '-g', group, '-d', dryrun, '-u', user_id])
+        process = subprocess.Popen(['python3', bot_script_path, '-d', dryrun, '-u', user_id])
         speak_with_polly(f"{user_id}bot has been started successfully.")
         return "Trading bot started with PID: " + str(process.pid)
     except Exception as e:
@@ -421,26 +426,31 @@ def is_trading_time():
     # Check if the current time is exactly 9:30 AM
     return current_time.hour == 9 and current_time.minute == 30 
 
-def auto_start_trading(n, dryrun="True"):
+def auto_start_trading(n, dryrun):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
+    def run_stream():
+        asyncio.run(keep_stream_alive(version="v2", feed="iex"))
+
+    stream_thread = threading.Thread(target=run_stream, daemon=True)
+    stream_thread.start()
     
     while True:
-        if is_trading_time():
+        if True: #is_trading_time():
             mode = "granular"
             group = "technology"
             
             logging.info(f"Trading time detected. Starting {n} bots with mode={mode} and group={group}")
-            speak_with_polly(f"It's {datetime.now().strftime('%H:%M:%S')}. Starting {n} trading bot with default settings.")
+            speak_with_polly(f"Starting {n} trading bot with default settings.")
+            
             
             for user in user_list[:int(n)]:
                 logging.debug(f"Starting bot for user {user}")
-                start_trading_bot(mode=mode, group=group, dryrun=dryrun, user_id=user)
+                start_trading_bot(dryrun=dryrun, user_id=user)
                 time.sleep(180)
             
             logging.info(f"All {n} bots started successfully")
-            time.sleep(20)  # Wait for 60 seconds to avoid multiple starts
-            login()
-            message = f"Hello Olusola good day. Jarvis has started {n} bots. {getCurrentBalance()}"
+            time.sleep(20)  # Wait for 60 seconds to avoid multiple start
+            message = f"Hello Olusola good day. Jarvis has started {n} bots. {get_current_balance()}"
             logging.debug(f"Sending start confirmation message: {message}")
             send_message("6185810303", "att", message)
         else:
@@ -615,6 +625,100 @@ def get_today_reports(n):
         error_msg = f"Error fetching reports: {e}"
         print(error_msg)
         return error_msg
+    
+
+async def keep_stream_alive(version: str = "v2", feed: str = "iex"):
+    api_key = get_parameter_value("/alpaca/key")
+    secret_key = get_parameter_value("/alpaca/secret")
+    while True:
+        try:
+            await start_alpaca_stream(api_key, secret_key,version="v2", feed="iex")
+        except Exception as e:
+            logging.error(f"WebSocket crashed: {e}")
+            await asyncio.sleep(5)  # backoff
+
+
+def read_tickers_from_file():
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with open(f"{today}-stocks-to-trade.csv", 'r') as f:
+            content = f.read().strip()
+            tickers = [s.strip().upper() for s in content.split(',') if s.strip()]
+            return set(tickers)
+    except Exception as e:
+        print(f"Error reading ticker file: {e}")
+        return set()
+    
+def build_sub_msg(action: str, tickers: Set[str]) -> dict:
+    return {
+        "action": action,
+        # "trades": list(tickers),
+        "quotes": list(tickers),
+        "bars": list(tickers)
+    }
+
+# ---- Monitor file for ticker changes every 10 minutes ----
+async def monitor_ticker_file(websocket, current_tickers: Set[str]):
+    while True:
+        await asyncio.sleep(600)  # wait 10 minutes
+        new_tickers = read_tickers_from_file()
+
+        to_add = new_tickers - current_tickers
+        to_remove = current_tickers - new_tickers
+
+        if to_remove:
+            unsub_msg = build_sub_msg("unsubscribe", to_remove)
+            await websocket.send(json.dumps(unsub_msg))
+            print(f"[INFO] Unsubscribed from: {sorted(to_remove)}")
+
+        if to_add:
+            sub_msg = build_sub_msg("subscribe", to_add)
+            await websocket.send(json.dumps(sub_msg))
+            print(f"[INFO] Subscribed to: {sorted(to_add)}")
+
+        current_tickers.clear()
+        current_tickers.update(new_tickers)
+
+# ---- Main WebSocket runner ----
+async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2", feed: str = "iex"):
+    logging.info(f"Connecting to Alpaca stream at wss://stream.data.alpaca.markets/{version}/{feed}")
+    url = f"wss://stream.data.alpaca.markets/{version}/{feed}"
+    print(f"[INFO] Connecting to {url}...")
+
+    async with websockets.connect(url) as websocket:
+        # Step 1: Authenticate
+        await websocket.send(json.dumps({
+            "action": "auth",
+            "key": api_key,
+            "secret": secret_key
+        }))
+
+        auth_response = await websocket.recv()
+        print("[INFO] Auth response:", auth_response)
+
+        # Step 2: Initial ticker load
+        current_tickers = read_tickers_from_file()
+        if not current_tickers:
+            print("[WARN] No tickers found on startup. Watching for future changes.")
+
+        # Step 3: Initial subscribe
+        if current_tickers:
+            sub_msg = build_sub_msg("subscribe", current_tickers)
+            await websocket.send(json.dumps(sub_msg))
+            print(f"[INFO] Subscribed to: {sorted(current_tickers)}")
+
+        # Step 4: Start ticker file monitor
+        asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
+
+        # Step 5: Listen to messages
+        while True:
+            msg = await websocket.recv()
+            try:
+                data = json.loads(msg)
+                print("[DATA]", data)
+                # Here you could write to shared memory or push to queue
+            except Exception as e:
+                print("[ERROR] Failed to process message:", e)
 
 def main():
     n = 3
@@ -639,10 +743,10 @@ def main():
     ##########################################################
     # END TEST SUITE
     ##########################################################
-
      # Start auto-trading checker in a separate thread
-    auto_start_thread = threading.Thread(target=auto_start_trading, args=(n,), daemon=True)
-    auto_start_thread.start()
+    auto_start_trading(2, True)
+    # auto_start_thread = threading.Thread(target=auto_start_trading, args=(n,), daemon=True)
+    # auto_start_thread.start()
     
     # Add the trading hours monitor thread
     trading_hours_thread = threading.Thread(target=monitor_trading_hours, args=(n,), daemon=True)
@@ -651,6 +755,8 @@ def main():
      # Start the error monitoring thread
     error_monitor_thread = threading.Thread(target=monitor_logs_for_errors, args=(n,), daemon=True)
     error_monitor_thread.start()
+
+    
     
     adjectives = ["read", "explain", "summarize"]
 
