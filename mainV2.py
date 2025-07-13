@@ -94,6 +94,28 @@ def canWeTrade(
 
     return trade
 
+from multiprocessing import shared_memory
+import json
+
+SHM_NAME = "alpaca_prices"  # same name you used in writer
+PRICE_MEM_SIZE = 1024       # same size as allocated
+
+def read_shared_prices():
+    try:
+        shm = shared_memory.SharedMemory(name=SHM_NAME)
+        raw = bytes(shm.buf[:PRICE_MEM_SIZE]).decode(errors="ignore")
+        data = json.loads(raw or "{}")
+        print(json.dumps(data, indent=2))  # Pretty-print the result
+        return data
+    except FileNotFoundError:
+        print("Shared memory not found. Is the writer process running?")
+        return {}
+    except json.JSONDecodeError:
+        print("Failed to decode JSON from shared memory.")
+        return {}
+
+
+    read_shared_prices()
 
 
 
@@ -105,9 +127,9 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
 
         average = get_latest_prices(stocks,alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
         # we are trying to spend a reasonable amount per stock buy
-        logging.info(f"current price of {stocks} is {average.get(stocks)}")
-        logging.info(type(average.get(stock)))
-
+        for stock in stocks:
+            logging.info(f"current price of {stock} is {average.get(stock)}")
+        
         quantity = 2
 
         results = {}
@@ -139,70 +161,38 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         
         count = 0
         logging.info(f"waiting for {stocks} price to rise current bought price is {total_cost}")
-        while float(rh.stocks.get_latest_price(stock)[0]) < average + (average * 0.0012):
+        current_stock_total = read_shared_prices()
+
+
+
+        while float(sum(float(current_stock_total.get(ticker, 0)) for ticker in stocks)) < total_cost + (total_cost * 0.0012):
             count += 1
-            DAYCOUNT += 1
-            time.sleep(50)
-            if count%49 == 0:
-                time.sleep(60)
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
-        if dry:
-            url = "https://paper-api.alpaca.markets/v2/orders"
+        def run_sell(stock):
+            return stock, place_order(stock, quantity, "sell", alpaca_api_key, alpaca_secret_key, dry)
 
-            payload = {
-                "type": "market",
-                "time_in_force": "day",
-                "symbol": stock,
-                "qty": quantity,
-                "side": "sell"
-            }
-            headers = {
-                "accept": "application/json",
-                "content-type": "application/json",
-                "APCA-API-KEY-ID": alpaca_api_key,
-                "APCA-API-SECRET-KEY": alpaca_secret_key
-            }
+        with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
+            futures = {executor.submit(run_sell, stock): stock for stock in stocks}
+            for future in as_completed(futures):
+                stock, result = future.result()
+                results[stock] = result
 
-            response = requests.post(url, json=payload, headers=headers)
-            print("here are the secrets",alpaca_secret_key, alpaca_api_key)
+        results
 
-            print(response.text)
-            response.raise_for_status()          # raises on HTTP errors
+        total_sale = 0.0
+        for stock, result in results.items():
+            try:
+                price = float(result.get("filled_avg_price", 0))
+                qty = int(result.get("filled_qty", 0))
+                total_cost += price * qty
+            except (TypeError, ValueError):
+                continue 
 
-            quantity = response.json().get("filled_qty", {})
-            price = response.json().get("filled_avg_price", {})
-            costSell = float(price) * float(quantity)
-            logging.info(f"stock sold at {costSell} after checking {count} times")
-            record_transaction(user_id, stock, 'sell', costSell * quantity)
-            return float(costSell) - float(costBuy)
-        else: 
-            url = "https://api.alpaca.markets/v2/orders"
-
-            payload = {
-                "type": "market",
-                "time_in_force": "day",
-                "symbol": stock,
-                "qty": quantity,
-                "side": "sell"
-            }
-            headers = {
-                "accept": "application/json",
-                "content-type": "application/json",
-                "APCA-API-KEY-ID": alpaca_api_key,
-                "APCA-API-SECRET-KEY": alpaca_secret_key
-            }
-
-            response = requests.post(url, json=payload, headers=headers)
-            print(response.text)
-            response.raise_for_status()          # raises on HTTP errors
-
-            quantity = response.json().get("filled_qty", {})
-            price = response.json().get("filled_avg_price", {})
-            sellprice = float(price) * float(quantity)
-            record_transaction(user_id, stock, 'sell', sellprice * quantity)
-            logging.info(f"stock sold at {sellprice} after checking {count} times") 
+      
+        record_transaction(user_id, stock, 'buy', total_cost)
+        logging.info(f"{stocks} bought at {total_cost}  without checking")
        
-        diff = (sellprice * quantity) - (buyprice * quantity)
+        diff = ( total_sale) - (total_cost)
         logging.info(f'we made {diff} on this sale')
     except Exception as e:
         logging.error(f"Error in monitorBuy: {str(e)}")

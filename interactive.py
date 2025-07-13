@@ -22,6 +22,8 @@ import asyncio
 import websockets
 import json
 from typing import Set, List, Dict, Tuple
+from multiprocessing import shared_memory
+
 
 
 
@@ -275,12 +277,15 @@ def start_trading_bot( dryrun, user_id):
         bot_script_path = os.path.join(current_dir, 'mainV2.py')
         
         # Start the trading bot as a subprocess using python3
-        process = subprocess.Popen(['python3', bot_script_path, '-d', dryrun, '-u', user_id])
+        if dryrun:
+            process = subprocess.Popen(['python3', bot_script_path, '-d', '-u', user_id])
+        else:
+            process = subprocess.Popen(['python3', bot_script_path, '-d', '-u', user_id])
         speak_with_polly(f"{user_id}bot has been started successfully.")
         return "Trading bot started with PID: " + str(process.pid)
     except Exception as e:
         error_message = f"Failed to start bot. Error: {str(e)}"
-        print(error_message)
+        logging.info(error_message)
         speak_with_polly(error_message)
         return error_message
 
@@ -399,7 +404,7 @@ def recognize_voice():
     stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
     stream.start_stream()
     
-    print("Listening for voice commands...")
+    logging.info("Listening for voice commands...")
     recognized_text = ""
     
     start_time = time.time()  # Track time to manage response delay
@@ -410,7 +415,7 @@ def recognize_voice():
             result = recognizer.Result()
             recognized_text = json.loads(result)["text"]
             if recognized_text:
-                print(f"Recognized command: {recognized_text}")
+                logging.info(f"Recognized command: {recognized_text}")
                 return recognized_text.lower()
        
             
@@ -428,11 +433,7 @@ def is_trading_time():
 
 def auto_start_trading(n, dryrun):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
-    def run_stream():
-        asyncio.run(keep_stream_alive(version="v2", feed="iex"))
-
-    stream_thread = threading.Thread(target=run_stream, daemon=True)
-    stream_thread.start()
+    
     
     while True:
         if True: #is_trading_time():
@@ -450,7 +451,7 @@ def auto_start_trading(n, dryrun):
             
             logging.info(f"All {n} bots started successfully")
             time.sleep(20)  # Wait for 60 seconds to avoid multiple start
-            message = f"Hello Olusola good day. Jarvis has started {n} bots. {get_current_balance()}"
+            message = f"Hello Olusola good day. Jarvis has started {n} bots."
             logging.debug(f"Sending start confirmation message: {message}")
             send_message("6185810303", "att", message)
         else:
@@ -487,7 +488,7 @@ def monitor_logs_for_errors(n):
             
         except Exception as e:
             logging.error(f"Error in monitor thread: {str(e)}", exc_info=True)
-            print(f"Error in monitor thread: {str(e)}")
+            logging.info(f"Error in monitor thread: {str(e)}")
             time.sleep(600)  # Continue monitoring even if there's an error
 
 def is_closing_time():
@@ -623,7 +624,7 @@ def get_today_reports(n):
 
     except Exception as e:
         error_msg = f"Error fetching reports: {e}"
-        print(error_msg)
+        logging.info(error_msg)
         return error_msg
     
 
@@ -646,7 +647,7 @@ def read_tickers_from_file():
             tickers = [s.strip().upper() for s in content.split(',') if s.strip()]
             return set(tickers)
     except Exception as e:
-        print(f"Error reading ticker file: {e}")
+        logging.info(f"Error reading ticker file: {e}")
         return set()
     
 def build_sub_msg(action: str, tickers: Set[str]) -> dict:
@@ -669,59 +670,100 @@ async def monitor_ticker_file(websocket, current_tickers: Set[str]):
         if to_remove:
             unsub_msg = build_sub_msg("unsubscribe", to_remove)
             await websocket.send(json.dumps(unsub_msg))
-            print(f"[INFO] Unsubscribed from: {sorted(to_remove)}")
+            logging.info(f"[INFO] Unsubscribed from: {sorted(to_remove)}")
 
         if to_add:
             sub_msg = build_sub_msg("subscribe", to_add)
             await websocket.send(json.dumps(sub_msg))
-            print(f"[INFO] Subscribed to: {sorted(to_add)}")
+            logging.info(f"[INFO] Subscribed to: {sorted(to_add)}")
 
         current_tickers.clear()
         current_tickers.update(new_tickers)
 
-# ---- Main WebSocket runner ----
+
 async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2", feed: str = "iex"):
     logging.info(f"Connecting to Alpaca stream at wss://stream.data.alpaca.markets/{version}/{feed}")
     url = f"wss://stream.data.alpaca.markets/{version}/{feed}"
-    print(f"[INFO] Connecting to {url}...")
+    logging.info(f"[INFO] Connecting to {url}...")
 
-    async with websockets.connect(url) as websocket:
-        # Step 1: Authenticate
-        await websocket.send(json.dumps({
-            "action": "auth",
-            "key": api_key,
-            "secret": secret_key
-        }))
+    PRICE_MEM_SIZE = 1024  # bytes
+    SHM_NAME = "alpaca_prices"
 
-        auth_response = await websocket.recv()
-        print("[INFO] Auth response:", auth_response)
+    shm = shared_memory.SharedMemory(create=True, size=PRICE_MEM_SIZE, name=SHM_NAME)
 
-        # Step 2: Initial ticker load
-        current_tickers = read_tickers_from_file()
-        if not current_tickers:
-            print("[WARN] No tickers found on startup. Watching for future changes.")
+    try:
+        async with websockets.connect(url) as websocket:
+            # Step 1: Authenticate
+            await websocket.send(json.dumps({
+                "action": "auth",
+                "key": api_key,
+                "secret": secret_key
+            }))
 
-        # Step 3: Initial subscribe
-        if current_tickers:
-            sub_msg = build_sub_msg("subscribe", current_tickers)
-            await websocket.send(json.dumps(sub_msg))
-            print(f"[INFO] Subscribed to: {sorted(current_tickers)}")
+            auth_response = await websocket.recv()
+            logging.info("[INFO] Auth response:", auth_response)
 
-        # Step 4: Start ticker file monitor
-        asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
+            # Step 2: Initial ticker load
+            current_tickers = read_tickers_from_file()
+            if not current_tickers:
+                logging.warning("[WARN] No tickers found on startup. Watching for future changes.")
 
-        # Step 5: Listen to messages
-        while True:
-            msg = await websocket.recv()
-            try:
+            # Step 3: Initial subscribe
+            if current_tickers:
+                sub_msg = build_sub_msg("subscribe", current_tickers)
+                await websocket.send(json.dumps(sub_msg))
+                logging.info(f"[INFO] Subscribed to: {sorted(current_tickers)}")
+
+            # Step 4: Start ticker file monitor
+            asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
+
+            # Step 5: Listen to messages and update shared memory
+            while True:
+                msg = await websocket.recv()
                 data = json.loads(msg)
-                print("[DATA]", data)
-                # Here you could write to shared memory or push to queue
-            except Exception as e:
-                print("[ERROR] Failed to process message:", e)
+                for d in data:
+                    if d.get("T") == "b":
+                        symbol = d["S"]
+                        price = d["c"]
+                        # Read current state
+                        try:
+                            current = json.loads(bytes(shm.buf[:]).decode(errors="ignore") or "{}")
+                        except json.JSONDecodeError:
+                            current = {}
+                        current[symbol] = price
+                        encoded = json.dumps(current).encode()
+                        shm.buf[:len(encoded)] = encoded
+
+    except Exception as e:
+        logging.error(f"Stream error: {e}")
+
+
+def run_stream():
+    started = False
+    eastern = pytz.timezone('US/Eastern')
+
+    while True:
+        asyncio.run(keep_stream_alive(version="v2", feed="iex"))
+        now = datetime.now(eastern)
+
+        # Run only Monday to Friday
+        if now.weekday() < 5:
+            # Wait for exactly 9:28 AM
+            if now.hour == 9 and now.minute == 28 and not started:
+                logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
+                asyncio.run(keep_stream_alive(version="v2", feed="iex"))
+                started = True
+
+            # Reset the `started` flag after 9:29 AM
+            if now.hour == 9 and now.minute > 28:
+                started = False
+
+        time.sleep(30) 
+
 
 def main():
     n = 3
+    dryrun =True
    
     
    
@@ -744,9 +786,11 @@ def main():
     # END TEST SUITE
     ##########################################################
      # Start auto-trading checker in a separate thread
-    auto_start_trading(2, True)
-    # auto_start_thread = threading.Thread(target=auto_start_trading, args=(n,), daemon=True)
-    # auto_start_thread.start()
+    
+    auto_start_thread = threading.Thread(target=auto_start_trading, args=(n, dryrun), daemon=True)
+    auto_start_thread.start()
+    auto_stream_thread = threading.Thread(target=run_stream, daemon=True)
+    auto_stream_thread.start()
     
     # Add the trading hours monitor thread
     trading_hours_thread = threading.Thread(target=monitor_trading_hours, args=(n,), daemon=True)
