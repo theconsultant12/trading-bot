@@ -436,7 +436,7 @@ def auto_start_trading(n, dryrun):
     
     
     while True:
-        if True: #is_trading_time():
+        if is_trading_time():
             mode = "granular"
             group = "technology"
             
@@ -743,7 +743,7 @@ def run_stream():
     eastern = pytz.timezone('US/Eastern')
 
     while True:
-        asyncio.run(keep_stream_alive(version="v2", feed="iex"))
+    
         now = datetime.now(eastern)
 
         # Run only Monday to Friday
@@ -789,6 +789,7 @@ def main():
     
     auto_start_thread = threading.Thread(target=auto_start_trading, args=(n, dryrun), daemon=True)
     auto_start_thread.start()
+
     auto_stream_thread = threading.Thread(target=run_stream, daemon=True)
     auto_stream_thread.start()
     

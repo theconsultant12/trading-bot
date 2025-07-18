@@ -1,4 +1,4 @@
-import robin_stocks.robinhood as rh
+
 from predict_stock import run_lstm
 from predict_stock_granular import run_lstm_granular
 import pandas as pd
@@ -404,7 +404,7 @@ def main():
 
 
     
-        groups = [ "FIFTY_TWO_WK_GAINERS", "DAY_GAINERS",  "UNUSUAL_VOLUME", "MOST_SHORTED_STOCKS", "TOP_VOLUME_ETFS"]
+        groups = [ "DAY_GAINERS", "FIFTY_TWO_WK_GAINERS",  "UNUSUAL_VOLUME", "MOST_SHORTED_STOCKS", "TOP_VOLUME_ETFS"]
         
         starthour = 9
         #login()
@@ -420,7 +420,11 @@ def main():
                 #run_lstm("NVDA")
                 for stock_id in sampleTrade:
                     latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
+                    
+                    
+                    #latest_price = price.get("c")
                     predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
+                    print(f"..................................{latest_price.get(stock_id)}")
                     
                     if latest_price.get(stock_id) > predicted_price:
                         logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
@@ -445,7 +449,7 @@ def main():
 
                 time.sleep(100)
 
-            time.sleep(100)
+            time.sleep(600)
         while datetime.now().hour < starthour:
             for group in groups:
                 logging.info(f"gathering data from the {group}")
@@ -455,7 +459,11 @@ def main():
                 #run_lstm("NVDA")
                 for stock_id in sampleTrade:
                     latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
+                    
+                    # Fallback if dict returned
+                    #latest_price = price.get("c")
                     predicted_price = run_lstm(stock_id, base_dir="data", epochs=50, show_plot=False)
+                    #print(f"..................................{latest_price.get(stock_id)}")
                     
                     if latest_price.get(stock_id) > predicted_price:
                         logging.info(f"Predicted price of {stock_id} is less than latest price. moving to the next stock")
@@ -470,11 +478,14 @@ def main():
                     )    
                     if latest_price.get(stock_id) < (0.5 * (week_high - week_low)) + week_low:
                         logging.info(f"{stock_id} is not in the lowest it has been all week. skipping to the next")
-                    if latest_price.get(stock_id) < predicted_price and latest_price < (0.4 * (week_high - week_low)) + week_low:
+                    if latest_price.get(stock_id) < predicted_price and latest_price.get(stock_id) < (0.4 * (week_high - week_low)) + week_low:
                         logging.info(f"Predicted price of {stock_id} is greater than latest price. We will trade this")
                         logging.info(f"writing the stock {stock_id} into a csv")
                         with open(f'{current_date}-stocks-to-trade.csv', 'a') as file:
                             file.write(f"{stock_id},")
+                        
+                    time.sleep(50)
+                time.sleep(100)
             
             time.sleep(1000)
     except Exception as e:
