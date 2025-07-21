@@ -258,36 +258,31 @@ def check_transaction(stocks):
         # Initialize DynamoDB client
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('bot-state-db')  # Replace with your table name
-    
-            
-        logging.info("checking is stock has been bought today")
-            # Create composite key with user_id and date
+
+        # Get today's date string (e.g., "2025-07-21")
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
+
+        logging.info("Checking if any stock has been bought today")
+
+        # Scan table for items whose composite_key starts with today's date
         response = table.scan(
-        FilterExpression="begins_with(#k, :date)",
-        ExpressionAttributeNames={
-            "#k": "composite_key"  # Replace 'composite_key' with your actual attribute name
-        },
-        ExpressionAttributeValues={
-            ":date": current_date
-        
-        }
+            FilterExpression="begins_with(#k, :date)",
+            ExpressionAttributeNames={"#k": "composite_key"},
+            ExpressionAttributeValues={":date": current_date}
         )
-        
-        # Track buys and sells
-        bought = False
-        
-        # Process all transactions
-        for item in response.get('Items', []):
-            for stock in stocks:
-                stock_returned = item['StockID']
-                if stock_returned == stock:
-                    bought = True
-        return bought
-         
-    except Exception as e:
-        logging.error(f"Failed to check if stock has been bought today: {str(e)}")
+
+        bought_stocks = {item.get("StockID") for item in response.get("Items", [])}
+        for stock in stocks:
+            if stock in bought_stocks:
+                logging.info(f"{stock} was already bought today")
+                return True
+
         return False
 
+    except Exception as e:
+        logging.error(f"Failed to check stock transaction: {str(e)}")
+        return False
 
 
 def record_transaction(user_id, stock, type, cost):
@@ -420,32 +415,62 @@ def cleanup():
 
 # Register cleanup functions
 
-
 def read_stocks_to_trade() -> list[str]:
     """
-    Read the stocks to trade from the date-stocks-to-trade.csv file.
-    Returns a list of stock symbols.
+    Reads stocks to trade from {current_date}-stocks-to-trade.csv, removes already traded ones,
+    and appends newly picked stocks to traded.csv to prevent other bots from trading them.
+    
+    Returns a list of stocks to trade that haven't been traded yet.
     """
     now = datetime.now()
     current_date = now.strftime("%Y-%m-%d")
+    trade_file = f"{current_date}-stocks-to-trade.csv"
+    traded_file = f"{current_date}-traded.csv"
+
     try:
-        file_path = f'{current_date}-stocks-to-trade.csv'
-        with open(file_path, 'r') as file:
+        # Read all available stocks
+        with open(trade_file, 'r') as file:
             content = file.read().strip()
-            if content:
-                # Split by comma and remove any empty strings
-                stocks = [stock.strip() for stock in content.split(',') if stock.strip()]
-                logging.info(f"Successfully read {len(stocks)} stocks from {file_path}")
-                return stocks
-            else:
-                logging.warning(f"No stocks found in {file_path}")
+            if not content:
+                logging.warning(f"No stocks found in {trade_file}")
                 return []
+
+            all_stocks = [s.strip() for s in content.split(',') if s.strip()]
+            logging.info(f"Read {len(all_stocks)} stocks from {trade_file}")
     except FileNotFoundError:
-        logging.error(f"File {file_path} not found")
+        logging.error(f"File {trade_file} not found")
         return []
     except Exception as e:
-        logging.error(f"Error reading stocks from {file_path}: {str(e)}")
+        logging.error(f"Error reading from {trade_file}: {str(e)}")
         return []
+
+    # Read already traded stocks
+    traded_stocks = set()
+    if os.path.exists(traded_file):
+        try:
+            with open(traded_file, 'r') as tf:
+                traded_stocks = set(tf.read().strip().split(','))
+        except Exception as e:
+            logging.error(f"Error reading from {traded_file}: {str(e)}")
+
+    # Filter stocks that haven't been traded
+    to_trade_now = [s for s in all_stocks if s not in traded_stocks]
+
+    if not to_trade_now:
+        logging.info("No new stocks left to trade")
+        return []
+
+    # Append the selected stocks to traded file
+    try:
+        with open(traded_file, 'a') as tf:
+            if os.path.getsize(traded_file) > 0:
+                tf.write(',')  # Add comma if file already has content
+            tf.write(','.join(to_trade_now))
+        logging.info(f"Logged {len(to_trade_now)} stocks to {traded_file}")
+    except Exception as e:
+        logging.error(f"Error writing to {traded_file}: {str(e)}")
+
+    return to_trade_now
 
 
 def main():
