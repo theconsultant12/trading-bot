@@ -8,6 +8,8 @@ fix report sending none | Fixed
 all bots have the tendency to  run the same trade stock
 if average is more than current, buy immediately
 
+write new file traded
+
 
 Big tasks:
 Create a cryptocurrentcy version of the trading bot using python. 

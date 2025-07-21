@@ -1,4 +1,3 @@
-import robin_stocks.robinhood as rh
 import sys
 from multiprocessing import Pool
 from datetime import datetime, timedelta
@@ -7,7 +6,7 @@ import logging
 import os
 import argparse
 import boto3
-from generatelist import get_latest_prices, get_parameter_value 
+from generatelist import  get_parameter_value 
 import pandas as pd
 import atexit
 import signal
@@ -124,40 +123,47 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
     prices = []
     global DAYCOUNT 
     try:
-
-        average = get_latest_prices(stocks,alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+        
+       
         # we are trying to spend a reasonable amount per stock buy
         for stock in stocks:
-            logging.info(f"current price of {stock} is {average.get(stock)}")
+            logging.info(f"current price of {stock} is {float(current_stock_total.get(stock, 0))}")
         
         quantity = 2
 
         results = {}
 
-        def run_buy(stock):
-            return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
+        
 
-        with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
-            futures = {executor.submit(run_buy, stock): stock for stock in stocks}
-            for future in as_completed(futures):
-                stock, result = future.result()
-                results[stock] = result
+        if not check_transaction(stocks):
 
-        results
+            def run_buy(stock):
+                return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
 
-        total_cost = 0.0
-        for stock, result in results.items():
-            try:
-                price = float(result.get("filled_avg_price", 0))
-                qty = int(result.get("filled_qty", 0))
-                total_cost += price * qty
-            except (TypeError, ValueError):
-                continue 
+            with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
+                futures = {executor.submit(run_buy, stock): stock for stock in stocks}
+                for future in as_completed(futures):
+                    stock, result = future.result()
+                    results[stock] = result
 
-      
-        record_transaction(user_id, stock, 'buy', total_cost)
-        logging.info(f"{stocks} bought at {total_cost}  without checking")
-       
+            results
+
+            total_cost = 0.0
+            for stock, result in results.items():
+                try:
+                    price = float(result.get("filled_avg_price", 0))
+                    qty = int(result.get("filled_qty", 0))
+                    total_cost += price * qty
+                except (TypeError, ValueError):
+                    continue 
+
+        
+            record_transaction(user_id, stock, 'buy', total_cost)
+            logging.info(f"{stocks} bought at {total_cost}  without checking")
+
+        else:
+            logging.info(f"we have stocks in hand that is trying to be sold by one of the bots")
+        
         
         count = 0
         logging.info(f"waiting for {stocks} price to rise current bought price is {total_cost}")
@@ -246,6 +252,41 @@ def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_ru
             "error": str(e)
         }
 
+
+def check_transaction(stocks):
+    try:
+        # Initialize DynamoDB client
+        dynamodb = boto3.resource('dynamodb')
+        table = dynamodb.Table('bot-state-db')  # Replace with your table name
+    
+            
+        logging.info("checking is stock has been bought today")
+            # Create composite key with user_id and date
+        response = table.scan(
+        FilterExpression="begins_with(#k, :date)",
+        ExpressionAttributeNames={
+            "#k": "composite_key"  # Replace 'composite_key' with your actual attribute name
+        },
+        ExpressionAttributeValues={
+            ":date": current_date
+        
+        }
+        )
+        
+        # Track buys and sells
+        bought = False
+        
+        # Process all transactions
+        for item in response.get('Items', []):
+            for stock in stocks:
+                stock_returned = item['StockID']
+                if stock_returned == stock:
+                    bought = True
+        return bought
+         
+    except Exception as e:
+        logging.error(f"Failed to check if stock has been bought today: {str(e)}")
+        return False
 
 
 

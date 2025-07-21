@@ -419,6 +419,7 @@ def main():
                 logging.info(f"these are the stocks we are trading{sampleTrade}")
                 #run_lstm("NVDA")
                 for stock_id in sampleTrade:
+                    
                     latest_price = get_latest_prices([stock_id], alpaca_api_key, alpaca_secret_key)
                     
                     
