@@ -429,7 +429,7 @@ def is_trading_time():
         return False
     
     # Check if the current time is exactly 9:30 AM
-    return current_time.hour == 9 and current_time.minute == 30 
+    return current_time.hour == 10 and current_time.minute == 30 
 
 def auto_start_trading(n, dryrun):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
@@ -749,13 +749,13 @@ def run_stream():
         # Run only Monday to Friday
         if now.weekday() < 5:
             # Wait for exactly 9:28 AM
-            if now.hour == 9 and now.minute == 28 and not started:
+            if now.hour == 10 and now.minute == 28 and not started:
                 logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
                 asyncio.run(keep_stream_alive(version="v2", feed="iex"))
                 started = True
 
             # Reset the `started` flag after 9:29 AM
-            if now.hour == 9 and now.minute > 28:
+            if now.hour == 10 and now.minute > 28:
                 started = False
 
         time.sleep(30) 

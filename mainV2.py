@@ -126,6 +126,7 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         
        
         # we are trying to spend a reasonable amount per stock buy
+        current_stock_total = read_shared_prices()
         for stock in stocks:
             logging.info(f"current price of {stock} is {float(current_stock_total.get(stock, 0))}")
         
@@ -167,11 +168,11 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         
         count = 0
         logging.info(f"waiting for {stocks} price to rise current bought price is {total_cost}")
-        current_stock_total = read_shared_prices()
+       
 
 
 
-        while float(sum(float(current_stock_total.get(ticker, 0)) for ticker in stocks)) < total_cost + (total_cost * 0.0012):
+        while float(sum(float(read_shared_prices().get(ticker, 0)) for ticker in stocks)) < total_cost + (total_cost * 0.0012):
             count += 1
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
         def run_sell(stock):
