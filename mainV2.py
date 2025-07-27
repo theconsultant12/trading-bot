@@ -14,6 +14,10 @@ import json
 from decimal import Decimal
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.common.exceptions import APIError
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -99,22 +103,34 @@ import json
 SHM_NAME = "alpaca_prices"  # same name you used in writer
 PRICE_MEM_SIZE = 1024       # same size as allocated
 
-def read_shared_prices():
-    try:
-        shm = shared_memory.SharedMemory(name=SHM_NAME)
-        raw = bytes(shm.buf[:PRICE_MEM_SIZE]).decode(errors="ignore")
-        data = json.loads(raw or "{}")
-        print(json.dumps(data, indent=2))  # Pretty-print the result
-        return data
-    except FileNotFoundError:
-        print("Shared memory not found. Is the writer process running?")
-        return {}
-    except json.JSONDecodeError:
-        print("Failed to decode JSON from shared memory.")
-        return {}
 
 
-    read_shared_prices()
+def read_shared_prices(retries=3, delay=0.1):
+    for attempt in range(retries):
+        try:
+            shm = shared_memory.SharedMemory(name=SHM_NAME)
+            raw_bytes = bytes(shm.buf[:PRICE_MEM_SIZE])
+            raw_str = raw_bytes.decode(errors="ignore")
+
+            # Trim at the last closing brace to try to make the JSON valid
+            last_brace = raw_str.rfind("}")
+            if last_brace != -1:
+                raw_str = raw_str[:last_brace + 1]
+
+            data = json.loads(raw_str)
+            print(json.dumps(data, indent=2))
+            return data
+
+        except FileNotFoundError:
+            print("Shared memory not found. Is the writer process running?")
+            return {}
+
+        except json.JSONDecodeError as e:
+            print(f"[Attempt {attempt+1}] Failed to decode JSON: {e}")
+            time.sleep(delay)
+
+    print("Failed to decode JSON from shared memory after retries.")
+    return {}
 
 
 
@@ -207,52 +223,48 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
     return diff
 
 
+
 def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_run=True):
     """
-    Places a market order (buy or sell) on Alpaca.
+    Places a market order (buy or sell) on Alpaca using the official Alpaca SDK.
     """
-    url = (
-        "https://paper-api.alpaca.markets/v2/orders"
-        if dry_run else
-        "https://api.alpaca.markets/v2/orders"
-    )
-
-    payload = {
-        "type": "market",
-        "time_in_force": "day",
-        "symbol": stock,
-        "qty": quantity,
-        "side": side  # "buy" or "sell"
-    }
-
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "APCA-API-KEY-ID": alpaca_api_key,
-        "APCA-API-SECRET-KEY": alpaca_secret_key
-    }
-
     try:
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        logging.info(f"{side.upper()} order for {stock} placed: {data}")
+        # Initialize the trading client
+        trading_client = TradingClient(alpaca_api_key, alpaca_secret_key, paper=dry_run)
+
+        # Convert string side to OrderSide enum
+        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+
+        # Create market order request
+        market_order_data = MarketOrderRequest(
+            symbol=stock,
+            qty=quantity,
+            side=order_side,
+            time_in_force=TimeInForce.DAY
+        )
+
+        # Submit the order
+        order = trading_client.submit_order(order_data=market_order_data)
+
+        logging.info(f"{side.upper()} order for {stock} placed: {order}")
+
         return {
             "symbol": stock,
             "side": side,
-            "filled_qty": data.get("filled_qty"),
-            "filled_avg_price": data.get("filled_avg_price"),
-            "status": data.get("status"),
-            "raw": data
-        }
-    except Exception as e:
-        logging.error(f"Failed to place {side} order for {stock}: {e}")
-        return {
-            "symbol": stock,
-            "side": side,
-            "error": str(e)
+            "filled_qty": getattr(order, "filled_qty", None),
+            "filled_avg_price": getattr(order, "filled_avg_price", None),
+            "status": order.status,
+            "raw": order.__dict__
         }
 
+    except APIError as e:
+        logging.error(f"APIError placing {side} order for {stock}: {e}")
+        return {"symbol": stock, "side": side, "error": str(e)}
+
+    except Exception as e:
+        logging.error(f"Unexpected error placing {side} order for {stock}: {e}")
+        return {"symbol": stock, "side": side, "error": str(e)}
+    
 
 def check_transaction(stocks):
     try:
@@ -286,34 +298,39 @@ def check_transaction(stocks):
         return False
 
 
+
 def record_transaction(user_id, stock, type, cost):
     try:
         # Initialize DynamoDB client
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('bot-state-db')  # Replace with your table name
-    
-            
-            # Create composite key with user_id and date
+
+        # Get current date string
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Create composite key with user_id and date
         composite_key = f"{user_id}#{current_date}"
-            
-            # Create item for DynamoDB
+
+        # Convert float to Decimal (use str to preserve precision)
+        cost_decimal = Decimal(str(cost))
+
+        # Create item for DynamoDB
         db_item = {
             'key': composite_key,  # Partition key: userId#date
             'UserId': user_id,
             'Date': current_date,
             'StockID': stock,
             'TransactionType': type,
-            'Cost': cost,
+            'Cost': cost_decimal,
             'Timestamp': datetime.now().isoformat()
         }
-        
+
         # Put item in DynamoDB
         table.put_item(Item=db_item)
-            
+
         logging.info(f"Data written to DynamoDB successfully for user {user_id}")
     except Exception as e:
         logging.error(f"Failed to write to DynamoDB: {str(e)}")
-
 
 def closeDay():
     """Calculate end of day statistics and find unsold stocks"""
