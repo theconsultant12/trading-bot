@@ -118,7 +118,7 @@ def read_shared_prices(retries=3, delay=0.1):
                 raw_str = raw_str[:last_brace + 1]
 
             data = json.loads(raw_str)
-            print(json.dumps(data, indent=2))
+            values = (json.dumps(data, indent=2))
             return data
 
         except FileNotFoundError:
@@ -142,20 +142,25 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         
        
         # we are trying to spend a reasonable amount per stock buy
-        current_stock_total = read_shared_prices()
+        current_stock_total = sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in stocks)
+
         for stock in stocks:
-            logging.info(f"current price of {stock} is {float(current_stock_total.get(stock, 0))}")
+            logging.info(f"current price of {stock} is {float(current_stock_total)}")
         
         quantity = 2
 
         results = {}
 
-        
+        # sellprice = rh.orders.order_sell_market(stock, quantity) 
+        def run_sell(stock):
+            return stock, place_order(stock, quantity, "sell", alpaca_api_key, alpaca_secret_key, dry)
+
+        def run_buy(stock):
+            return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
 
         if not check_transaction(stocks):
 
-            def run_buy(stock):
-                return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
+            
 
             with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
                 futures = {executor.submit(run_buy, stock): stock for stock in stocks}
@@ -175,7 +180,7 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
                     continue 
 
         
-            record_transaction(user_id, stock, 'buy', total_cost)
+                record_transaction(user_id, stock, 'buy', total_cost)
             logging.info(f"{stocks} bought at {total_cost}  without checking")
 
         else:
@@ -188,11 +193,10 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
 
 
 
-        while float(sum(float(read_shared_prices().get(ticker, 0)) for ticker in stocks)) < total_cost + (total_cost * 0.0012):
+        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in stocks) < total_cost * Decimal("1.0012"): 
             count += 1
-        # sellprice = rh.orders.order_sell_market(stock, quantity) 
-        def run_sell(stock):
-            return stock, place_order(stock, quantity, "sell", alpaca_api_key, alpaca_secret_key, dry)
+            time.sleep(3)
+            pass
 
         with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
             futures = {executor.submit(run_sell, stock): stock for stock in stocks}
@@ -213,7 +217,7 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
 
       
         record_transaction(user_id, stock, 'buy', total_cost)
-        logging.info(f"{stocks} bought at {total_cost}  without checking")
+        logging.info(f"{stocks} sold at {total_cost}  after checking {count} times")
        
         diff = ( total_sale) - (total_cost)
         logging.info(f'we made {diff} on this sale')
