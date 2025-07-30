@@ -429,7 +429,7 @@ def is_trading_time():
         return False
     
     # Check if the current time is exactly 9:30 AM
-    return current_time.hour == 10 and current_time.minute == 30 
+    return current_time.hour == 9 and current_time.minute == 30 
 
 def auto_start_trading(n, dryrun):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
@@ -717,22 +717,41 @@ async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2"
             # Step 4: Start ticker file monitor
             asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
 
-            # Step 5: Listen to messages and update shared memory
             while True:
-                msg = await websocket.recv()
-                data = json.loads(msg)
-                for d in data:
-                    if d.get("T") == "b":
-                        symbol = d["S"]
-                        price = d["c"]
-                        # Read current state
-                        try:
-                            current = json.loads(bytes(shm.buf[:]).decode(errors="ignore") or "{}")
-                        except json.JSONDecodeError:
-                            current = {}
-                        current[symbol] = price
-                        encoded = json.dumps(current).encode()
-                        shm.buf[:len(encoded)] = encoded
+                try:
+                    msg = await websocket.recv()
+                    data = json.loads(msg)
+                    
+                    for d in data:
+                        if d.get("T") == "b":  # Bar message
+                            symbol = d["S"]
+                            price = d["c"]
+
+                            # Read current state from shared memory
+                            try:
+                                raw_data = bytes(shm.buf[:]).decode(errors="ignore").strip('\x00')
+                                current = json.loads(raw_data or "{}")
+                            except json.JSONDecodeError:
+                                logging.warning(f"Failed to decode JSON from shared memory. Raw data: {raw_data}")
+                                current = {}
+
+                            # Update with new price
+                            current[symbol] = price
+
+                            # Serialize and write back to shared memory
+                            encoded = json.dumps(current).encode()
+
+                            # Zero out the buffer before writing
+                            shm.buf[:len(shm.buf)] = b'\x00' * len(shm.buf)
+
+                            # Write only up to the length of the encoded JSON
+                            shm.buf[:len(encoded)] = encoded
+
+                except json.JSONDecodeError:
+                    logging.warning("Received non-JSON message from websocket.")
+                except Exception as e:
+                    logging.error(f"Unexpected error in websocket loop: {e}")
+                    await asyncio.sleep(1)  # Optional: avoid tight crash loop
 
     except Exception as e:
         logging.error(f"Stream error: {e}")
@@ -749,13 +768,13 @@ def run_stream():
         # Run only Monday to Friday
         if now.weekday() < 5:
             # Wait for exactly 9:28 AM
-            if now.hour == 10 and now.minute == 28 and not started:
+            if now.hour == 9 and now.minute == 28 and not started:
                 logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
                 asyncio.run(keep_stream_alive(version="v2", feed="iex"))
                 started = True
 
             # Reset the `started` flag after 9:29 AM
-            if now.hour == 10 and now.minute > 28:
+            if now.hour == 9 and now.minute > 29:
                 started = False
 
         time.sleep(30) 
