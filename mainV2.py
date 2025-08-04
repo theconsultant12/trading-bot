@@ -18,6 +18,8 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import OrderStatus
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -132,7 +134,65 @@ def read_shared_prices(retries=3, delay=0.1):
     print("Failed to decode JSON from shared memory after retries.")
     return {}
 
+def wait_for_order_fills(stock_list: list[str], timeout: int = 180, interval: int = 5, order_side: str = "buy") -> dict:
+    """
+    Wait until all orders for the given stock symbols are either filled or failed.
 
+    :param stock_list: List of stock symbols to check
+    :param timeout: Total max seconds to wait
+    :param interval: Seconds to wait between checks
+    :return: Dict of {symbol: final Order object or None if unresolved}
+    """
+    alpaca_api_key = get_parameter_value("/alpaca/key")
+    alpaca_secret_key = get_parameter_value("/alpaca/secret")
+
+    trading_client = TradingClient(alpaca_api_key, alpaca_secret_key, paper=True)
+
+    deadline = time.time() + timeout
+    symbols_pending = set(stock_list)
+    final_orders = {}
+    if order_side == "buy":
+        order_side = OrderSide.BUY
+    elif order_side == "sell":
+        order_side = OrderSide.SELL
+
+    logging.info(f"Waiting for orders to be filled or resolved: {stock_list}")
+
+    while time.time() < deadline and symbols_pending:
+        try:
+            # Get all open + recent orders
+            request = GetOrdersRequest(status=None)  # gets all orders
+            orders = trading_client.get_orders(filter=request)
+
+            for order in orders:
+                sym = order.symbol
+                if sym in symbols_pending:
+                    if order.status == OrderStatus.FILLED and order.side == order_side:
+                        logging.info(f"{sym} order resolved: {order.status}")
+                        final_orders[sym] = order.filled_avg_price * order.filled_qty
+                        symbols_pending.discard(sym)
+                    elif order.status == OrderStatus.CANCELED:
+                        logging.info(f"{sym} order canceled: {order.status}")
+                        symbols_pending.discard(sym)
+                    elif order.status == OrderStatus.REJECTED:
+                        logging.info(f"{sym} order rejected: {order.status}")
+                        symbols_pending.discard(sym)
+                    else:
+                        logging.debug(f"{sym} still pending: {order.status}")
+
+        except Exception as e:
+            logging.error(f"Error checking orders: {str(e)}")
+
+        if symbols_pending:
+            time.sleep(interval)
+
+    # Final pass to record any unresolved orders
+    if symbols_pending:
+        logging.warning(f"Timeout reached. These symbols did not resolve: {symbols_pending}")
+        for sym in symbols_pending:
+            final_orders[sym] = None
+
+    return final_orders
 
 def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
@@ -143,14 +203,17 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
        
         # we are trying to spend a reasonable amount per stock buy
         current_stock_total = sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in stocks)
-
-        for stock in stocks:
-            logging.info(f"current price of {stock} is {float(current_stock_total)}")
+        if not current_stock_total:
+            logging.info(f"no stocks in shared memory")
+            return 0
+        
         
         quantity = 2
 
-        results = {}
-
+        buy_results = {}
+        sell_results = {}
+        total_cost = 0.0
+        total_sale = 0.0
         # sellprice = rh.orders.order_sell_market(stock, quantity) 
         def run_sell(stock):
             return stock, place_order(stock, quantity, "sell", alpaca_api_key, alpaca_secret_key, dry)
@@ -165,61 +228,47 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
             with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
                 futures = {executor.submit(run_buy, stock): stock for stock in stocks}
                 for future in as_completed(futures):
-                    stock, result = future.result()
-                    results[stock] = result
+                    stock, buy_result = future.result()
+                    buy_results[stock] = buy_result
 
-            results
+            
 
-            total_cost = 0.0
-            for stock, result in results.items():
-                try:
-                    price = float(result.get("filled_avg_price", 0))
-                    qty = int(result.get("filled_qty", 0))
-                    total_cost += price * qty
-                except (TypeError, ValueError):
-                    continue 
-
-        
-                record_transaction(user_id, stock, 'buy', total_cost)
-            logging.info(f"{stocks} bought at {total_cost}  without checking")
+            logging.info(f"{stocks} bought at {buy_results}  without checking")
 
         else:
             logging.info(f"we have stocks in hand that is trying to be sold by one of the bots")
-        
+        bought_stocks = wait_for_order_fills(stocks, order_side="buy")  
+        for stock, price in bought_stocks.items():
+            record_transaction(user_id, stock, 'buy', price)
+            total_cost += price
         
         count = 0
-        logging.info(f"waiting for {stocks} price to rise current bought price is {total_cost}")
+        logging.info(f"waiting for {bought_stocks.keys()} price to rise current bought price is {total_cost}")
        
 
-
-
-        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in stocks) < total_cost * Decimal("1.0012"): 
+        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in bought_stocks.keys()) < Decimal(total_cost) * Decimal("1.0012"): 
             count += 1
-            time.sleep(3)
+            time.sleep(5)
             pass
 
         with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
-            futures = {executor.submit(run_sell, stock): stock for stock in stocks}
+            futures = {executor.submit(run_sell, bought_stocks.keys()): stock for stock in bought_stocks.keys()}
             for future in as_completed(futures):
                 stock, result = future.result()
-                results[stock] = result
+                sell_results[stock] = result
 
-        results
+        
 
-        total_sale = 0.0
-        for stock, result in results.items():
-            try:
-                price = float(result.get("filled_avg_price", 0))
-                qty = int(result.get("filled_qty", 0))
-                total_cost += price * qty
-            except (TypeError, ValueError):
-                continue 
+        sold_stocks = wait_for_order_fills(bought_stocks.keys(), order_side="sell")
 
-      
-        record_transaction(user_id, stock, 'buy', total_cost)
-        logging.info(f"{stocks} sold at {total_cost}  after checking {count} times")
+        
+        for stock, price in sold_stocks.items():
+            record_transaction(user_id, stock, 'sell', price)
+            total_sale += price
+
+        logging.info(f"{sold_stocks.keys()} sold at {total_sale}  after checking {count} times")
        
-        diff = ( total_sale) - (total_cost)
+        diff = (total_sale) - (total_cost)
         logging.info(f'we made {diff} on this sale')
     except Exception as e:
         logging.error(f"Error in monitorBuy: {str(e)}")

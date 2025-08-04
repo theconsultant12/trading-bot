@@ -20,16 +20,17 @@ import boto3
 import base64, getpass, os, random, uuid, time, sys, requests
 from pathlib import Path
 from typing import Dict, List
-
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
 import os, logging, requests, pandas as pd
 from datetime import datetime, timedelta, timezone
-
 import os
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Tuple
-
 import pandas as pd
 import requests
 from pandas.errors import EmptyDataError
@@ -306,6 +307,67 @@ def getAllTrades(
         stockList.append(sym)
 
     return stockList
+
+
+
+def get_recent_13f_trades(days: int = 3, limit: int = 10):
+    """
+    Fetches top trades from all 13F-HR filings submitted in the last `days` days.
+
+    :param days: Number of days to look back
+    :param limit: Number of top holdings to return by value
+    :return: List of top trades across all filings
+    """
+    headers = {"User-Agent": "YourName your.email@example.com"}
+    base_atom_url = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&CIK=&type=13F-HR&owner=include&count=100&output=atom"
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=days)
+
+    try:
+        resp = requests.get(base_atom_url, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, "xml")
+        entries = soup.find_all("entry")
+
+        holdings = []
+
+        for entry in entries:
+            updated_str = entry.find("updated").text.strip()
+            updated_dt = datetime.strptime(updated_str, "%Y-%m-%dT%H:%M:%S-04:00")
+            if updated_dt < cutoff:
+                continue
+
+            filing_url = entry.find("link")["href"].replace("-index.htm", ".xml")
+
+            try:
+                filing_resp = requests.get(filing_url, headers=headers)
+                filing_resp.raise_for_status()
+                root = ET.fromstring(filing_resp.content)
+
+                for info in root.findall(".//infoTable"):
+                    try:
+                        name = info.find("nameOfIssuer").text
+                        cusip = info.find("cusip").text
+                        value = int(info.find("value").text)
+                        shares = int(info.find("sshPrnamt").text)
+                        holdings.append({
+                            "name": name,
+                            "ticker_or_cusip": cusip,
+                            "value_$1000s": value,
+                            "shares": shares,
+                            "filing_date": updated_str
+                        })
+                    except Exception:
+                        continue
+            except Exception as filing_error:
+                continue  # skip bad filings
+
+        top_holdings = sorted(holdings, key=lambda x: x["value_$1000s"], reverse=True)[:limit]
+        return top_holdings
+
+    except Exception as e:
+        print(f"Error fetching recent 13F filings: {e}")
+        return []
 
 
 def get_latest_prices(
