@@ -134,7 +134,7 @@ def read_shared_prices(retries=3, delay=0.1):
     print("Failed to decode JSON from shared memory after retries.")
     return {}
 
-def wait_for_order_fills(stock_list: list[str], timeout: int = 180, interval: int = 5, order_side: str = "buy") -> dict:
+def wait_for_order_fills(stock_list: list[str], timeout: int = 360, interval: int = 5, order_side: str = "buy") -> dict:
     """
     Wait until all orders for the given stock symbols are either filled or failed.
 
