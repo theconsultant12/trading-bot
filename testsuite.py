@@ -7,7 +7,7 @@ import os
 import xml.etree.ElementTree as ET
 from lxml import etree
 
-HEADERS = {"User-Agent": "Olusola Fowosire <your.email@example.com>"}
+HEADERS = {"User-Agent": "Olusola Fowosire <oaf992@gmail.com>"}
 ATOM_FEED_URL = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=13F-HR&owner=include&count=100&output=atom"
 SEC_ARCHIVE_BASE = "https://www.sec.gov/Archives/edgar/data"
 
@@ -181,7 +181,7 @@ def parse_all_infotables(folder: str = "infotables") -> list[dict]:
 # --- Run Parser ---
 
 if __name__ == "__main__":
-    # populate_infotables(5)
+    populate_infotables(5)
     results = parse_all_infotables()
 
     for r in results:

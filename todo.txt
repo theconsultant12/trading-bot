@@ -1,14 +1,5 @@
-now we have a bot and a controller
-fix all errors till date
-    
-    ERROR - Error in monitorBuy: float() argument must be a string or a number, not 'NoneType' | Error from robinhood
-fix report sending none | Fixed
-
-
-all bots have the tendency to  run the same trade stock
-if average is more than current, buy immediately
-
-write new file traded
+add politician follow
+fix generatelist 
 
 
 Big tasks:

@@ -435,20 +435,34 @@ def load_config(config_path: str = "parameters.config") -> dict:
     return config
 
 
+def create_pid_file(pid_file):
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+
+def cleanup():
+    pid_file_path = f'/tmp/generatelist-process.pid'
+    if os.path.exists(pid_file_path):
+        os.remove(pid_file_path)
+
+
 def main():
     try:
         
         now = datetime.now()
+        pid_file_path = f'/tmp/generatelist-process.pid'
+        create_pid_file(pid_file_path)
+        logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
+        atexit.register(cleanup)
+        
         current_date = now.strftime("%Y-%m-%d")
         logging.basicConfig(filename=f'logs/generator-logs/{current_date}-generator.log', level=logging.INFO,
                             format='%(asctime)s - %(levelname)s - %(message)s')
 
 
         logging.info(f"-------------------------------------------------------------------------------------------------\n\n")
-        # parser = argparse.ArgumentParser(description='Trading bot configuration')
-        # parser.add_argument('-g', '--group', type=str, required=True, 
-        #                   help='The group of stocks to trade (DAY_GAINERS, DAY_LOSERS, MOST_ACTIVE, FIFTY_TWO_WK_GAINERS, FIFTY_TWO_WK_LOSERS UNUSUAL_VOLUME, MOST_SHORTED_STOCKS, TOP_VOLUME_ETFS)')
-        
+       
        
 
         
@@ -466,7 +480,7 @@ def main():
 
 
     
-        groups = [ "DAY_GAINERS", "FIFTY_TWO_WK_GAINERS",  "UNUSUAL_VOLUME", "MOST_SHORTED_STOCKS", "TOP_VOLUME_ETFS"]
+        groups = [ "DAY_GAINERS", "FIFTY_TWO_WK_GAINERS",  "UNUSUAL_VOLUME", "MOST_SHORTED_STOCKS"]
         
         starthour = 9
         #login()

@@ -20,10 +20,9 @@ import robin_stocks.robinhood as rh
 import pytz  # Add this import at the top
 import asyncio
 import websockets
-import json
 from typing import Set, List, Dict, Tuple
 from multiprocessing import shared_memory
-
+import requests
 
 
 
@@ -35,44 +34,15 @@ logging.basicConfig(filename=f'logs/interactive-logs/{current_date}controller-lo
 MODEL_PATH = os.path.join(os.path.abspath(os.getcwd()), "vosk-model-en-us-0.22")  
 recognizer = vosk.KaldiRecognizer(vosk.Model(MODEL_PATH), 16000)
 
-user_list = [
-    'U001', 'U002', 'U003', 'U004', 'U005', 'U006', 'U007', 'U008', 'U009', 'U010',
-    'U011', 'U012', 'U013', 'U014', 'U015', 'U016', 'U017', 'U018', 'U019', 'U020',
-    'U021', 'U022', 'U023', 'U024', 'U025', 'U026', 'U027', 'U028', 'U029', 'U030',
-    'U031', 'U032', 'U033', 'U034', 'U035', 'U036', 'U037', 'U038', 'U039', 'U040',
-    'U041', 'U042', 'U043', 'U044', 'U045', 'U046', 'U047', 'U048', 'U049', 'U050',
-    'U051', 'U052', 'U053', 'U054', 'U055', 'U056', 'U057', 'U058', 'U059', 'U060',
-    'U061', 'U062', 'U063', 'U064', 'U065', 'U066', 'U067', 'U068', 'U069', 'U070',
-    'U071', 'U072', 'U073', 'U074', 'U075', 'U076', 'U077', 'U078', 'U079', 'U080',
-    'U081', 'U082', 'U083', 'U084', 'U085', 'U086', 'U087', 'U088', 'U089', 'U090',
-    'U091', 'U092', 'U093', 'U094', 'U095', 'U096', 'U097', 'U098', 'U099', 'U100'
-]
+user_list = [f"U{str(i).zfill(3)}" for i in range(1, 101)]
 
 
-CARRIERS = {
-    "att": "@mms.att.net",
-    "tmobile": "@tmomail.net",
-    "verizon": "@vtext.com",
-    "sprint": "@messaging.sprintpcs.com"
-}
 
-def send_message(phone_number, carrier, message):
-    try:
-        recipient = phone_number + CARRIERS[carrier]
-        #use aws sns
-        logging.info(f"sending message to {phone_number}")
-        
-        u = get_parameter_value('/mail/username')
-        p = get_parameter_value('/mail/password')
-        auth = [u, p]
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-
-        server.login(auth[0], auth[1])
-        server.sendmail(auth[0], recipient, message)
-    except Exception as e:
-        logging.error(f"Failed to send message: {str(e)}")
-
+def send_message(message):
+    webhook_url = "https://discord.com/api/webhooks/1429499429500616819/QGTkav9VrxgLx6d6068fx0PbRtBUmm1xGFZ8jaDZPAY5hX6o1l7m7tq_gwC-cHU8QCRt"
+    payload = {"content": f"📊 {message}"}
+    requests.post(webhook_url, json=payload)
+    
 
 def is_process_running(pid_file):
     try:
@@ -266,6 +236,23 @@ def analyze_logs(keyword, all_logs):
         speak_with_polly("No logs were found for the specified date range.")
 
 
+def start_generate_list():
+    try:
+        # Get the current directory
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Construct the path to generatelist.py
+        bot_script_path = os.path.join(current_dir, 'generatelist.py')
+        
+        
+        process = subprocess.Popen(['python3', bot_script_path])
+        speak_with_polly(f"stock list generator has been started successfully.")
+        return "stock list generator started with PID: " + str(process.pid)
+    except Exception as e:
+        error_message = f"Failed to start stock list generator. Error: {str(e)}"
+        logging.info(error_message)
+        speak_with_polly(error_message)
+        return error_message
 
 
 def start_trading_bot( dryrun, user_id):
@@ -282,7 +269,6 @@ def start_trading_bot( dryrun, user_id):
         else:
             process = subprocess.Popen(['python3', bot_script_path, '-d', '-u', user_id])
         speak_with_polly(f"{user_id}bot has been started successfully.")
-        return "Trading bot started with PID: " + str(process.pid)
     except Exception as e:
         error_message = f"Failed to start bot. Error: {str(e)}"
         logging.info(error_message)
@@ -329,6 +315,38 @@ def stop_trading_bot(n):
         return error_message
 
 
+def stop_generate_list():
+    try:
+    logging.info("stopping stock list generator")
+        pid_file_path = f'/tmp/generatelist-process.pid'
+        
+        if not os.path.exists(pid_file_path):
+            speak_with_polly(f"stock list generator is not running.")
+            logging.info(f"stock list generator is not running.")
+        
+        with open(pid_file_path, 'r') as f:
+            pid = int(f.read().strip())
+        
+        if not os.kill(pid, signal.SIGTERM):
+        
+            time.sleep(15)
+            try:
+                os.kill(pid, 0)
+                # If we reach here, the process is still running
+                os.kill(pid, signal.SIGKILL)
+                speak_with_polly(f"stock list generator was forcefully terminated.")
+            except OSError:
+                # Process has terminated
+                speak_with_polly(f"stock list generator was stopped successfully.")
+            
+        # Remove the PID file
+        os.remove(pid_file_path)
+        
+        return f"stock list generator stopped."
+    except Exception as e:
+        error_message = f"Failed to stop stock list generator. Error: {str(e)}"
+        speak_with_polly(error_message)
+        return error_message
 
 
 # Function to send the log data to GPT and get an explanation
@@ -429,7 +447,17 @@ def is_trading_time():
         return False
     
     # Check if the current time is exactly 9:30 AM
-    return current_time.hour == 10 and current_time.minute == 30 
+    return current_time.hour == 9 and current_time.minute == 30 
+
+def is_generate_list_time():
+    eastern = pytz.timezone('US/Eastern')  # Define the Eastern timezone
+    current_time = datetime.now(eastern)  # Get the current time in Eastern Time
+    
+    # Check if today is a weekday (Monday to Friday)
+    if current_time.weekday() >= 5: 
+        return False
+    
+    return current_time.hour == 00 and current_time.minute == 00 
 
 def auto_start_trading(n, dryrun):
     logging.info(f"Starting auto-trading for {n} bots with dryrun={dryrun}")
@@ -437,10 +465,8 @@ def auto_start_trading(n, dryrun):
     
     while True:
         if is_trading_time():
-            mode = "granular"
-            group = "technology"
             
-            logging.info(f"Trading time detected. Starting {n} bots with mode={mode} and group={group}")
+            logging.info(f"Trading time detected. Starting {n} bots")
             speak_with_polly(f"Starting {n} trading bot with default settings.")
             
             
@@ -451,9 +477,40 @@ def auto_start_trading(n, dryrun):
             
             logging.info(f"All {n} bots started successfully")
             time.sleep(20)  # Wait for 60 seconds to avoid multiple start
-            message = f"Hello Olusola good day. Jarvis has started {n} bots."
+            subset = user_list[:int(n)]
+            running = [u for u in subset if is_process_running(f"/tmp/{u}trading-bot-process.pid")]
+
+            if running:
+                message = (f"Jarvis status at {datetime.now():%Y-%m-%d %H:%M:%S}: "
+                        f"{len(running)}/{len(subset)} bots running: {', '.join(running)}")
+                logging.debug(f"Sending start confirmation message: {message}")
+                send_message(message)
+            else:
+                logging.debug("No bots are running.")
+            
+            
+        else:
+            pass
+        
+        time.sleep(30)  # Check every 30 seconds
+
+def auto_start_generate_list():
+    logging.info(f"Starting auto-trading for stock list generator")
+    
+    
+    while True:
+        if is_generate_list_time():
+            
+            logging.info(f"Trading time detected. Starting stock list generator")
+            speak_with_polly(f"Starting stock list generator")
+            
+            
+            start_generate_list()
+            
+            logging.info(f"stock list generator started successfully")
+            message = f"Jarvis has started stock list generator. {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             logging.debug(f"Sending start confirmation message: {message}")
-            send_message("6185810303", "att", message)
+            send_message(message)
         else:
             pass
         
@@ -514,8 +571,9 @@ def monitor_trading_hours(n):
                 stop_trading_bot(n)
                 logging.info("Successfully stopped trading bots")
                 
-                message = f"Hello Olusola, Jarvis has stopped {n} bots for the day. here is his report{get_today_reports(n)}"
-                send_message("6185810303", "att", message)
+                stop_generate_list()
+                message = f"Jarvis has stopped stock list generator and {n} trading bots. {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                send_message(message)
                 logging.info("Sent end-of-day notification message")
                 
                 time.sleep(60)  # Wait to avoid multiple stops
@@ -781,7 +839,7 @@ def run_stream():
 
 
 def main():
-    n = 3
+    n = 2
     dryrun =True
    
     
@@ -808,6 +866,9 @@ def main():
     
     auto_start_thread = threading.Thread(target=auto_start_trading, args=(n, dryrun), daemon=True)
     auto_start_thread.start()
+
+    auto_start_generate_list_thread = threading.Thread(target=auto_start_generate_list, daemon=True)
+    auto_start_generate_list_thread.start()
 
     auto_stream_thread = threading.Thread(target=run_stream, daemon=True)
     auto_stream_thread.start()
@@ -859,10 +920,6 @@ def main():
             elif "stop" in voice_command:
                   stop_trading_bot(n)
                   
-            elif "start" in voice_command:
-                for user in user_list[int(n):2]:
-                    logging.debug(f"Starting bot for user {user}")
-                    start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
 
             elif "exit" in voice_command:
                 speak_with_polly("Exiting the program.")
