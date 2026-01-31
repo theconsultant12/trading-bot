@@ -317,7 +317,7 @@ def stop_trading_bot(n):
 
 def stop_generate_list():
     try:
-    logging.info("stopping stock list generator")
+        logging.info("stopping stock list generator")
         pid_file_path = f'/tmp/generatelist-process.pid'
         
         if not os.path.exists(pid_file_path):
@@ -700,7 +700,7 @@ async def keep_stream_alive(version: str = "v2", feed: str = "iex"):
 def read_tickers_from_file():
     today = datetime.now().strftime("%Y-%m-%d")
     try:
-        with open(f"{today}-stocks-to-trade.csv", 'r') as f:
+        with open(f"stocks-to-trade.csv", 'r') as f:
             content = f.read().strip()
             tickers = [s.strip().upper() for s in content.split(',') if s.strip()]
             return set(tickers)
