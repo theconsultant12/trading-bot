@@ -488,14 +488,14 @@ def cleanup():
 
 def read_stocks_to_trade() -> list[str]:
     """
-    Reads stocks to trade from {current_date}-stocks-to-trade.csv, removes already traded ones,
+    Reads stocks to trade from stocks-to-trade.csv, removes already traded ones,
     and appends newly picked stocks to traded.csv to prevent other bots from trading them.
     
     Returns a list of stocks to trade that haven't been traded yet.
     """
     now = datetime.now()
     current_date = now.strftime("%Y-%m-%d")
-    trade_file = f"{current_date}-stocks-to-trade.csv"
+    trade_file = f"stocks-to-trade.csv"
     traded_file = f"{current_date}-traded.csv"
 
     try:
