@@ -226,16 +226,19 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> float
         def run_buy(stock):
             return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
 
-        if not check_transaction(stocks):
-            with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
-                futures = {executor.submit(run_buy, stock): stock for stock in stocks}
-                for future in as_completed(futures):
-                    stock, buy_result = future.result()
-                    buy_results[stock] = buy_result
-            logging.info("%s buy orders submitted: %s", stocks, buy_results)
-        else:
-            logging.info("One or more stocks in %s already traded today — skipping buys", stocks)
+        if check_transaction(stocks):
+            logging.info("Batch %s already traded today — skipping", stocks)
+            return 0
 
+        # ---- Bulk buy: submit all orders simultaneously ----
+        with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
+            futures = {executor.submit(run_buy, stock): stock for stock in stocks}
+            for future in as_completed(futures):
+                stock, buy_result = future.result()
+                buy_results[stock] = buy_result
+        logging.info("Batch buy orders submitted for %s", stocks)
+
+        # Wait for ALL buy fills before proceeding
         bought_stocks = wait_for_order_fills(stocks, order_side="buy")
         for stock, price in bought_stocks.items():
             if price is not None:
@@ -243,46 +246,47 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> float
                 total_cost += float(price)
 
         if not total_cost:
-            logging.warning("No fills confirmed for %s — nothing to sell", stocks)
+            logging.warning("No buy fills confirmed for batch %s — aborting", stocks)
             return 0
 
-        logging.info("Holding %s — total cost $%.2f. Waiting for +%.2f%% gain.",
+        logging.info("Batch bought %s — total cost $%.2f. Waiting for +%.2f%% batch gain.",
                      list(bought_stocks.keys()), total_cost,
                      float(PROFIT_TARGET - 1) * 100)
 
-        # Monitor: sell on profit target, stop-loss, or timeout
+        # Monitor batch value: sell the whole batch on profit target, stop-loss, or timeout
         count = 0
         wait_start = time.time()
         while True:
             prices_now = read_shared_prices()
-            # Compare current portfolio value (price × qty) against total cost
-            current_value = sum(
+            batch_value = sum(
                 Decimal(str(prices_now.get(ticker, 0))) * Decimal(str(quantity))
                 for ticker in bought_stocks
             )
 
-            if current_value >= Decimal(str(total_cost)) * PROFIT_TARGET:
-                logging.info("Profit target hit: current value $%.2f", float(current_value))
+            if batch_value >= Decimal(str(total_cost)) * PROFIT_TARGET:
+                logging.info("Batch profit target reached: $%.2f >= $%.2f",
+                             float(batch_value), float(Decimal(str(total_cost)) * PROFIT_TARGET))
                 break
-            if current_value > 0 and current_value < Decimal(str(total_cost)) * STOP_LOSS_FACTOR:
-                logging.warning("Stop-loss triggered: $%.2f < floor $%.2f",
-                                float(current_value),
+            if batch_value > 0 and batch_value < Decimal(str(total_cost)) * STOP_LOSS_FACTOR:
+                logging.warning("Batch stop-loss triggered: $%.2f < floor $%.2f",
+                                float(batch_value),
                                 float(Decimal(str(total_cost)) * STOP_LOSS_FACTOR))
                 break
             if time.time() - wait_start > MAX_HOLD_SECONDS:
-                logging.warning("Max hold time (%ds) reached — forcing sell", MAX_HOLD_SECONDS)
+                logging.warning("Batch max hold time (%ds) reached — forcing sell", MAX_HOLD_SECONDS)
                 break
 
             count += 1
             time.sleep(5)
 
-        # Place sell orders (one per stock)
+        # ---- Bulk sell: submit all sell orders simultaneously ----
         with ThreadPoolExecutor(max_workers=len(bought_stocks)) as executor:
             futures = {executor.submit(run_sell, stock): stock for stock in bought_stocks}
             for future in as_completed(futures):
                 stock, result = future.result()
                 sell_results[stock] = result
 
+        # Wait for ALL sell fills before recording
         sold_stocks = wait_for_order_fills(list(bought_stocks.keys()), order_side="sell")
         for stock, price in sold_stocks.items():
             if price is not None:
@@ -290,7 +294,7 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> float
                 total_sale += float(price)
 
         diff = total_sale - total_cost
-        logging.info("%s sold after %d checks — cost $%.2f  sale $%.2f  P&L $%.4f",
+        logging.info("Batch %s closed after %d checks — cost $%.2f  sale $%.2f  P&L $%.4f",
                      list(sold_stocks.keys()), count, total_cost, total_sale, diff)
 
     except Exception as e:

@@ -830,14 +830,14 @@ def run_stream():
 
         # Run only Monday to Friday
         if now.weekday() < 5:
-            # Start stream at 9:28 AM ET (two minutes before market open)
-            if now.hour == 9 and now.minute == 28 and not started:
-                logging.info("Starting Alpaca WebSocket stream at 9:28 AM ET...")
+            # Start stream at market open: 9:30 AM ET
+            if now.hour == 9 and now.minute == 30 and not started:
+                logging.info("Starting Alpaca WebSocket stream at 9:30 AM ET...")
                 asyncio.run(keep_stream_alive(version="v2", feed="iex"))
                 started = True
 
-            # Reset flag each day after 9:29 AM
-            if now.hour == 9 and now.minute > 29:
+            # Reset flag each day after 9:31 AM
+            if now.hour == 9 and now.minute > 31:
                 started = False
 
         time.sleep(30)
