@@ -1,38 +1,23 @@
 
 from predict_stock import run_lstm
 from predict_stock_granular import run_lstm_granular
-import pandas as pd
-import logging
-from datetime import datetime, timedelta
-import time
+import atexit
 import argparse
+import json
 import logging
-import time
-import requests
 import os
-import json, re, sys
-from hashlib import md5
+import sys
+import time
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Dict, List, Tuple
+
+import boto3
 import pandas as pd
 import requests
 import yfinance as yf
-import boto3
-import base64, getpass, os, random, uuid, time, sys, requests
-from pathlib import Path
-from typing import Dict, List
-import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-import xml.etree.ElementTree as ET
-import os, logging, requests, pandas as pd
-from datetime import datetime, timedelta, timezone
-import os
-import logging
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Tuple
-import pandas as pd
-import requests
 from pandas.errors import EmptyDataError
 
 def get_top_52w_gainers(limit: int = 100, group: str = "52-week-gainers") -> list[str]:
@@ -59,64 +44,16 @@ def get_top_52w_gainers(limit: int = 100, group: str = "52-week-gainers") -> lis
 
 
 def get_parameter_value(parameter_name):
-
     ssm_client = boto3.client('ssm')
-
     try:
         logging.info(f"getting parameter {parameter_name}")
         response = ssm_client.get_parameter(Name=parameter_name)
         return response['Parameter']['Value']
-
     except ssm_client.exceptions.ParameterNotFound:
-        logging.info(f"Parameter '{parameter_name}' not found.")
+        logging.warning(f"Parameter '{parameter_name}' not found.")
         return None
-
     except Exception as e:
-        print(f"Error occurred in getting parameters: {str(e)}")
-        return None
-
-
-
-def getWeightedAverage(stock):
-    data = rh.stocks.get_stock_historicals(stock,interval="10minute", span="day")
-        
-    data_hour = data[-10:]
-    combined = data + data_hour
-
-    df = pd.DataFrame(combined)
-    
-    # Convert prices to numeric values
-    df['open_price'] = pd.to_numeric(df['open_price'])
-    df['close_price'] = pd.to_numeric(df['close_price'])
-    df['high_price'] = pd.to_numeric(df['high_price'])
-    df['low_price'] = pd.to_numeric(df['low_price'])
-
-
-    avg_open = df['open_price'].mean()
-    avg_close = df['close_price'].mean()
-    # avg_high = df['high_price'].mean()
-    # avg_low = df['low_price'].mean()
-    dayaverage = (avg_open + avg_close)/2 
-    return(dayaverage)
-
-
-
-
-def get_parameter_value(parameter_name):
-
-    ssm_client = boto3.client('ssm')
-
-    try:
-        logging.info(f"getting parameter {parameter_name}")
-        response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
-
-    except ssm_client.exceptions.ParameterNotFound:
-        print(f"Parameter '{parameter_name}' not found.")
-        return None
-
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
+        logging.error(f"Error fetching parameter '{parameter_name}': {str(e)}")
         return None
     
 

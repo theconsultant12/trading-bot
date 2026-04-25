@@ -1,4 +1,5 @@
 import sys
+import threading
 from multiprocessing import Pool
 from datetime import datetime, timedelta
 import time
@@ -6,7 +7,7 @@ import logging
 import os
 import argparse
 import boto3
-from generatelist import  get_parameter_value 
+from generatelist import get_parameter_value
 import pandas as pd
 import atexit
 import signal
@@ -104,34 +105,33 @@ import json
 
 SHM_NAME = "alpaca_prices"  # same name you used in writer
 PRICE_MEM_SIZE = 1024       # same size as allocated
-
+_shm_lock = threading.Lock()  # guards shared memory reads
 
 
 def read_shared_prices(retries=3, delay=0.1):
     for attempt in range(retries):
         try:
-            shm = shared_memory.SharedMemory(name=SHM_NAME)
-            raw_bytes = bytes(shm.buf[:PRICE_MEM_SIZE])
-            raw_str = raw_bytes.decode(errors="ignore")
+            with _shm_lock:
+                shm = shared_memory.SharedMemory(name=SHM_NAME)
+                raw_bytes = bytes(shm.buf[:PRICE_MEM_SIZE])
+                shm.close()
 
-            # Trim at the last closing brace to try to make the JSON valid
+            raw_str = raw_bytes.decode(errors="ignore")
             last_brace = raw_str.rfind("}")
             if last_brace != -1:
                 raw_str = raw_str[:last_brace + 1]
 
-            data = json.loads(raw_str)
-            values = (json.dumps(data, indent=2))
-            return data
+            return json.loads(raw_str)
 
         except FileNotFoundError:
-            print("Shared memory not found. Is the writer process running?")
+            logging.warning("Shared memory not found. Is the price stream running?")
             return {}
 
         except json.JSONDecodeError as e:
-            print(f"[Attempt {attempt+1}] Failed to decode JSON: {e}")
+            logging.debug(f"[Attempt {attempt+1}] Failed to decode shared-memory JSON: {e}")
             time.sleep(delay)
 
-    print("Failed to decode JSON from shared memory after retries.")
+    logging.error("Failed to decode shared-memory JSON after %d retries.", retries)
     return {}
 
 def wait_for_order_fills(stock_list: list[str], timeout: int = 360, interval: int = 5, order_side: str = "buy") -> dict:
@@ -194,27 +194,32 @@ def wait_for_order_fills(stock_list: list[str], timeout: int = 360, interval: in
 
     return final_orders
 
-def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
-    """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
-    prices = []
-    global DAYCOUNT 
+MAX_HOLD_SECONDS = 1800       # 30-minute max hold before force-sell
+PROFIT_TARGET = Decimal("1.0012")   # 0.12% gain target
+STOP_LOSS_FACTOR = Decimal("0.995") # 0.5% drop triggers stop-loss
+
+
+def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> float:
+    """
+    Buy a batch of stocks, then sell when the profit target is reached,
+    a stop-loss is triggered, or MAX_HOLD_SECONDS elapses.
+    Returns the realised P&L for this batch.
+    """
+    global DAYCOUNT
+    diff = 0.0
     try:
-        
-       
-        # we are trying to spend a reasonable amount per stock buy
-        current_stock_total = sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in stocks)
-        if not current_stock_total:
-            logging.info(f"no stocks in shared memory")
+        current_prices = read_shared_prices()
+        if not any(current_prices.get(ticker) for ticker in stocks):
+            logging.info("No prices in shared memory for %s — skipping batch", stocks)
             return 0
-        
-        
+
         quantity = 2
 
-        buy_results = {}
-        sell_results = {}
+        buy_results: dict = {}
+        sell_results: dict = {}
         total_cost = 0.0
         total_sale = 0.0
-        # sellprice = rh.orders.order_sell_market(stock, quantity) 
+
         def run_sell(stock):
             return stock, place_order(stock, quantity, "sell", alpaca_api_key, alpaca_secret_key, dry)
 
@@ -222,57 +227,76 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
             return stock, place_order(stock, quantity, "buy", alpaca_api_key, alpaca_secret_key, dry)
 
         if not check_transaction(stocks):
-
-            
-
             with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
                 futures = {executor.submit(run_buy, stock): stock for stock in stocks}
                 for future in as_completed(futures):
                     stock, buy_result = future.result()
                     buy_results[stock] = buy_result
-
-            
-
-            logging.info(f"{stocks} bought at {buy_results}  without checking")
-
+            logging.info("%s buy orders submitted: %s", stocks, buy_results)
         else:
-            logging.info(f"we have stocks in hand that is trying to be sold by one of the bots")
-        bought_stocks = wait_for_order_fills(stocks, order_side="buy")  
-        for stock, price in bought_stocks.items():
-            record_transaction(user_id, stock, 'buy', price)
-            total_cost += price
-        
-        count = 0
-        logging.info(f"waiting for {bought_stocks.keys()} price to rise current bought price is {total_cost}")
-       
+            logging.info("One or more stocks in %s already traded today — skipping buys", stocks)
 
-        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in bought_stocks.keys()) < Decimal(total_cost) * Decimal("1.0012"): 
+        bought_stocks = wait_for_order_fills(stocks, order_side="buy")
+        for stock, price in bought_stocks.items():
+            if price is not None:
+                record_transaction(user_id, stock, 'buy', price)
+                total_cost += float(price)
+
+        if not total_cost:
+            logging.warning("No fills confirmed for %s — nothing to sell", stocks)
+            return 0
+
+        logging.info("Holding %s — total cost $%.2f. Waiting for +%.2f%% gain.",
+                     list(bought_stocks.keys()), total_cost,
+                     float(PROFIT_TARGET - 1) * 100)
+
+        # Monitor: sell on profit target, stop-loss, or timeout
+        count = 0
+        wait_start = time.time()
+        while True:
+            prices_now = read_shared_prices()
+            # Compare current portfolio value (price × qty) against total cost
+            current_value = sum(
+                Decimal(str(prices_now.get(ticker, 0))) * Decimal(str(quantity))
+                for ticker in bought_stocks
+            )
+
+            if current_value >= Decimal(str(total_cost)) * PROFIT_TARGET:
+                logging.info("Profit target hit: current value $%.2f", float(current_value))
+                break
+            if current_value > 0 and current_value < Decimal(str(total_cost)) * STOP_LOSS_FACTOR:
+                logging.warning("Stop-loss triggered: $%.2f < floor $%.2f",
+                                float(current_value),
+                                float(Decimal(str(total_cost)) * STOP_LOSS_FACTOR))
+                break
+            if time.time() - wait_start > MAX_HOLD_SECONDS:
+                logging.warning("Max hold time (%ds) reached — forcing sell", MAX_HOLD_SECONDS)
+                break
+
             count += 1
             time.sleep(5)
-            pass
 
-        with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
-            futures = {executor.submit(run_sell, bought_stocks.keys()): stock for stock in bought_stocks.keys()}
+        # Place sell orders (one per stock)
+        with ThreadPoolExecutor(max_workers=len(bought_stocks)) as executor:
+            futures = {executor.submit(run_sell, stock): stock for stock in bought_stocks}
             for future in as_completed(futures):
                 stock, result = future.result()
                 sell_results[stock] = result
 
-        
-
-        sold_stocks = wait_for_order_fills(bought_stocks.keys(), order_side="sell")
-
-        
+        sold_stocks = wait_for_order_fills(list(bought_stocks.keys()), order_side="sell")
         for stock, price in sold_stocks.items():
-            record_transaction(user_id, stock, 'sell', price)
-            total_sale += price
+            if price is not None:
+                record_transaction(user_id, stock, 'sell', price)
+                total_sale += float(price)
 
-        logging.info(f"{sold_stocks.keys()} sold at {total_sale}  after checking {count} times")
-       
-        diff = (total_sale) - (total_cost)
-        logging.info(f'we made {diff} on this sale')
+        diff = total_sale - total_cost
+        logging.info("%s sold after %d checks — cost $%.2f  sale $%.2f  P&L $%.4f",
+                     list(sold_stocks.keys()), count, total_cost, total_sale, diff)
+
     except Exception as e:
-        logging.error(f"Error in monitorBuy: {str(e)}")
-        diff = 0
+        logging.error("Error in monitorBuy: %s", str(e), exc_info=True)
+        diff = 0.0
+
     return diff
 
 
@@ -321,33 +345,27 @@ def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_ru
 
 def check_transaction(stocks):
     try:
-        # Initialize DynamoDB client
+        from boto3.dynamodb.conditions import Attr
         dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('bot-state-db')  # Replace with your table name
+        table = dynamodb.Table('bot-state-db')
+        current_date = datetime.now().strftime("%Y-%m-%d")
 
-        # Get today's date string (e.g., "2025-07-21")
-        now = datetime.now()
-        current_date = now.strftime("%Y-%m-%d")
+        logging.info("Checking if any stock in %s was already bought today", stocks)
 
-        logging.info("Checking if any stock has been bought today")
-
-        # Scan table for items whose composite_key starts with today's date
         response = table.scan(
-            FilterExpression="begins_with(#k, :date)",
-            ExpressionAttributeNames={"#k": "composite_key"},
-            ExpressionAttributeValues={":date": current_date}
+            FilterExpression=Attr("Date").eq(current_date)
         )
 
-        bought_stocks = {item.get("StockID") for item in response.get("Items", [])}
+        bought_today = {item.get("StockID") for item in response.get("Items", [])}
         for stock in stocks:
-            if stock in bought_stocks:
-                logging.info(f"{stock} was already bought today")
+            if stock in bought_today:
+                logging.info("%s was already traded today — skipping batch", stock)
                 return True
 
         return False
 
     except Exception as e:
-        logging.error(f"Failed to check stock transaction: {str(e)}")
+        logging.error("Failed to check stock transaction: %s", str(e))
         return False
 
 
@@ -392,15 +410,10 @@ def closeDay():
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('bot-state-db')
         
-        # Get today's transactions
+        from boto3.dynamodb.conditions import Attr
+        # Get today's transactions using the Date attribute
         response = table.scan(
-        FilterExpression="begins_with(#k, :date)",
-        ExpressionAttributeNames={
-            "#k": "composite_key"  # Replace 'composite_key' with your actual attribute name
-        },
-        ExpressionAttributeValues={
-            ":date": current_date
-        }
+            FilterExpression=Attr("Date").eq(current_date)
         )
         
         # Track buys and sells
@@ -617,14 +630,12 @@ def main():
             time.sleep(20)
 
         if DAYCOUNT >= DAILYAPILIMIT:
-            reason = "daily api limit reached"  
-            logging.info(reason)  
-        if startBalance - get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)- startBalance == 500:
-            
-            reason = "we lost 50 dollars already during today's trade"  
-            logging.info(reason)    
-              
+            logging.info("Daily API limit reached (%d calls)", DAILYAPILIMIT)
+
         endBalance = get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
+        daily_loss = startBalance - endBalance
+        if daily_loss >= 500:
+            logging.warning("Daily loss limit hit: lost $%.2f today", daily_loss)
         
         if endBalance > startBalance:
             word = "PROFIT"

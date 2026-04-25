@@ -39,9 +39,15 @@ user_list = [f"U{str(i).zfill(3)}" for i in range(1, 101)]
 
 
 def send_message(message):
-    webhook_url = "https://discord.com/api/webhooks/1429499429500616819/QGTkav9VrxgLx6d6068fx0PbRtBUmm1xGFZ8jaDZPAY5hX6o1l7m7tq_gwC-cHU8QCRt"
+    webhook_url = get_parameter_value("/discord/webhook_url")
+    if not webhook_url:
+        logging.warning("Discord webhook URL not configured in SSM (/discord/webhook_url)")
+        return
     payload = {"content": f"📊 {message}"}
-    requests.post(webhook_url, json=payload)
+    try:
+        requests.post(webhook_url, json=payload, timeout=5)
+    except Exception as e:
+        logging.error("Failed to send Discord message: %s", str(e))
     
 
 def is_process_running(pid_file):
@@ -820,22 +826,21 @@ def run_stream():
     eastern = pytz.timezone('US/Eastern')
 
     while True:
-    
         now = datetime.now(eastern)
 
         # Run only Monday to Friday
         if now.weekday() < 5:
-            # Wait for exactly 9:28 AM
-            if now.hour == 10 and now.minute == 28 and not started:
-                logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
+            # Start stream at 9:28 AM ET (two minutes before market open)
+            if now.hour == 9 and now.minute == 28 and not started:
+                logging.info("Starting Alpaca WebSocket stream at 9:28 AM ET...")
                 asyncio.run(keep_stream_alive(version="v2", feed="iex"))
                 started = True
 
-            # Reset the `started` flag after 9:29 AM
-            if now.hour == 10 and now.minute > 29:
+            # Reset flag each day after 9:29 AM
+            if now.hour == 9 and now.minute > 29:
                 started = False
 
-        time.sleep(30) 
+        time.sleep(30)
 
 
 def main():
