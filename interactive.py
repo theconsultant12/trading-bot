@@ -39,7 +39,12 @@ user_list = [f"U{str(i).zfill(3)}" for i in range(1, 101)]
 
 
 def send_message(message):
-    webhook_url = "https://discord.com/api/webhooks/1429499429500616819/QGTkav9VrxgLx6d6068fx0PbRtBUmm1xGFZ8jaDZPAY5hX6o1l7m7tq_gwC-cHU8QCRt"
+
+    webhook_url = get_parameter_value('/discord/webhook-url')
+    if not webhook_url:
+        logging.error("Discord webhook URL not found in SSM Parameter Store")
+        return
+    
     payload = {"content": f"📊 {message}"}
     requests.post(webhook_url, json=payload)
     

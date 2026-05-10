@@ -6,7 +6,6 @@ import logging
 import os
 import argparse
 import boto3
-from generatelist import  get_parameter_value 
 import pandas as pd
 import atexit
 import signal
@@ -38,6 +37,11 @@ CARRIERS = {
 
 
 current_date = datetime.now().strftime("%Y-%m-%d")
+
+def get_parameter_value(parameter_name):
+    ssm = boto3.client('ssm')
+    response = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
+    return response['Parameter']['Value']
 
 
 def create_pid_file(pid_file):
