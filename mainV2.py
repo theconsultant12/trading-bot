@@ -19,6 +19,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import OrderStatus
+import robin_stocks.robinhood as rh
 
 
 boto3.setup_default_session(region_name='us-east-1')
@@ -301,26 +302,41 @@ def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_ru
         )
 
         # Submit the order
-        order = trading_client.submit_order(order_data=market_order_data)
+        if dry_run:
+            order = trading_client.submit_order(order_data=market_order_data)
+            logging.info(f"{side.upper()} order for {stock} placed: dry run")
+            return {
+                "symbol": stock,
+                "side": side,
+                "filled_qty": getattr(order, "filled_qty", None),
+                "filled_avg_price": getattr(order, "filled_avg_price", None),
+                "status": order.status,
+                "raw": order.__dict__
+            }
 
-        logging.info(f"{side.upper()} order for {stock} placed: {order}")
+            except APIError as e:
+                logging.error(f"APIError placing {side} order for {stock}: {e}")
+                return {"symbol": stock, "side": side, "error": str(e)}
 
-        return {
-            "symbol": stock,
-            "side": side,
-            "filled_qty": getattr(order, "filled_qty", None),
-            "filled_avg_price": getattr(order, "filled_avg_price", None),
-            "status": order.status,
-            "raw": order.__dict__
-        }
+        else:
+            if side == "buy":
+                order = rh.orders.order_buy_market(symbol=stock, quantity=quantity, account_number="806281630")
+            elif side == "sell":
+                order = rh.orders.order_sell_market(symbol=stock, quantity=quantity, account_number="806281630")
+            else:
+                logging.error(f"Invalid side: {side}")
+                return {"symbol": stock, "side": side, "error": "Invalid side"}
 
-    except APIError as e:
-        logging.error(f"APIError placing {side} order for {stock}: {e}")
-        return {"symbol": stock, "side": side, "error": str(e)}
+            logging.info(f"{side.upper()} order for {stock} placed: {order}")
+            return {
+                "symbol": stock,
+                "side": side=00
+                "filled_qty": order.get("quantity", None),
+                "filled_avg_price": order.get("average_price", None),
+                "status": "filled",
+                "raw": order
+            }
 
-    except Exception as e:
-        logging.error(f"Unexpected error placing {side} order for {stock}: {e}")
-        return {"symbol": stock, "side": side, "error": str(e)}
     
 
 def check_transaction(stocks):

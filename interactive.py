@@ -23,6 +23,22 @@ import websockets
 from typing import Set, List, Dict, Tuple
 from multiprocessing import shared_memory
 import requests
+import robin_stocks.robinhood as rh
+
+
+def login_to_robinhood():
+    auth_expire = datetime.strptime(
+        get_parameter_value("/robinhood/auth-expire"),
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    if datetime.now() > auth_expire:
+        return rh.authentication.login(
+            username=get_parameter_value("/robinhood/username"),
+            password=get_parameter_value("/robinhood/password")
+        )
+
+    return get_parameter_value("/robinhood/token")
 
 
 
