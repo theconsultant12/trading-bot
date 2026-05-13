@@ -9,7 +9,7 @@ import pyaudio
 import subprocess
 import signal
 import time
-from openai import OpenAI
+import google.generativeai as genai
 import threading
 from mainV2 import  get_current_balance
 import logging
@@ -105,8 +105,10 @@ def get_parameter_value(parameter_name):
         logging.error(f"Error occurred while retrieving parameter '{parameter_name}': {str(e)}", exc_info=True)
         return None
 
-openai = OpenAI(api_key=get_parameter_value('/openai/api-key'))
-# Set your OpenAI API key
+GEMINI_API_KEY = get_parameter_value("/gemini/api-key")
+GEMINI_MODEL = get_parameter_value("/gemini/model") or "gemini-2.0-flash"
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 
 # Read the logs from a file
@@ -370,19 +372,24 @@ def stop_generate_list():
         return error_message
 
 
-# Function to send the log data to GPT and get an explanation
+# Function to send the log data to Gemini and get an explanation
 def gpt_logs(keyword, log_text):
     logging.info(log_text)
-    response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",  # Updated to "gpt-4-turbo" since "gpt-4o-mini" might be incorrect or unavailable
-        messages=[  # Messages should be a list of dicts
-            {"role": "user", "content": f"{keyword} the following logs in simple terms:\n\n{log_text}. make the response concise"}
-        ]
+    if not GEMINI_API_KEY:
+        msg = "Log analysis unavailable: set SSM parameter /gemini/api-key."
+        logging.error(msg)
+        return msg
+    prompt = (
+        f"{keyword} the following logs in simple terms:\n\n{log_text}\n\n"
+        "Make the response concise."
     )
-    logging.info(response.choices[0].message.content)
-    return response.choices[0].message.content
-
-    #return response.choices[0].message['content']
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    response = model.generate_content(prompt)
+    text = (response.text or "").strip()
+    if not text and getattr(response, "prompt_feedback", None):
+        logging.warning("Gemini returned no text: %s", response.prompt_feedback)
+    logging.info(text)
+    return text or "No analysis returned from Gemini."
 
 
 def currently_trading(n):

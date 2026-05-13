@@ -17,7 +17,7 @@ dependencies:
     - matplotlib
     - boto3
     - robin_stocks
-    - openai
+    - google-generativeai
     - playsound
     - pyaudio
     - vosk
