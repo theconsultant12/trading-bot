@@ -20,6 +20,7 @@ import robin_stocks.robinhood as rh
 import pytz  # Add this import at the top
 import asyncio
 import websockets
+from websockets.exceptions import ConnectionClosed
 from typing import Set, List, Dict, Tuple
 from multiprocessing import shared_memory
 import requests
@@ -775,7 +776,10 @@ async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2"
     PRICE_MEM_SIZE = 1024  # bytes
     SHM_NAME = "alpaca_prices"
 
-    shm = shared_memory.SharedMemory(create=True, size=PRICE_MEM_SIZE, name=SHM_NAME)
+    try:
+        shm = shared_memory.SharedMemory(create=True, size=PRICE_MEM_SIZE, name=SHM_NAME)
+    except FileExistsError:
+        shm = shared_memory.SharedMemory(create=False, name=SHM_NAME)
 
     try:
         async with websockets.connect(url) as websocket:
@@ -835,6 +839,9 @@ async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2"
 
                 except json.JSONDecodeError:
                     logging.warning("Received non-JSON message from websocket.")
+                except ConnectionClosed as e:
+                    logging.warning(f"WebSocket connection closed: {e}. Reconnecting...")
+                    break
                 except Exception as e:
                     logging.error(f"Unexpected error in websocket loop: {e}")
                     await asyncio.sleep(1)  # Optional: avoid tight crash loop
@@ -869,20 +876,25 @@ def run_stream():
 def main():
     n = 2
     dryrun =True
-   
-    
+
+    try:
+        subprocess.Popen(['python3', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jarvis_ui.py')])
+    except Exception as e:
+        logging.error(f"Failed to launch dashboard UI: {e}")
+
+
    
     ##########################################################
     ## TEST SUITE
     ##########################################################
-
+    logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
+    asyncio.run(keep_stream_alive(version="v2", feed="iex"))
   
-    # logging.debug(f"Starting bot for user testUser")
-    # start_trading_bot(mode="granular", group="biopharmaceutical", dryrun="True", user_id="testUser")
-    # for user in user_list[int(n):2]:
-                
-    #     logging.debug(f"Starting bot for user {user}")
-    #     start_trading_bot(mode="granular", group="technology", dryrun="True", user_id=user)
+    
+    for user in user_list[:int(n)]:
+        logging.debug(f"Starting bot for user {user}")
+        start_trading_bot(dryrun=dryrun, user_id=user)
+        time.sleep(180)
     #     time.sleep(30)
             
     # logging.info(f"All {n} bots started successfully")
@@ -895,8 +907,6 @@ def main():
     auto_start_thread = threading.Thread(target=auto_start_trading, args=(n, dryrun), daemon=True)
     auto_start_thread.start()
 
-    auto_start_generate_list_thread = threading.Thread(target=auto_start_generate_list, daemon=True)
-    auto_start_generate_list_thread.start()
 
     auto_stream_thread = threading.Thread(target=run_stream, daemon=True)
     auto_stream_thread.start()
