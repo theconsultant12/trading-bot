@@ -314,10 +314,6 @@ def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_ru
                 "raw": order.__dict__
             }
 
-            except APIError as e:
-                logging.error(f"APIError placing {side} order for {stock}: {e}")
-                return {"symbol": stock, "side": side, "error": str(e)}
-
         else:
             if side == "buy":
                 order = rh.orders.order_buy_market(symbol=stock, quantity=quantity, account_number="806281630")
@@ -330,14 +326,21 @@ def place_order(stock, quantity, side, alpaca_api_key, alpaca_secret_key, dry_ru
             logging.info(f"{side.upper()} order for {stock} placed: {order}")
             return {
                 "symbol": stock,
-                "side": side=00
+                "side": side,
                 "filled_qty": order.get("quantity", None),
                 "filled_avg_price": order.get("average_price", None),
                 "status": "filled",
                 "raw": order
             }
 
-    
+    except APIError as e:
+        logging.error(f"APIError placing {side} order for {stock}: {e}")
+        return {"symbol": stock, "side": side, "error": str(e)}
+
+    except Exception as e:
+        logging.error(f"Unexpected error placing {side} order for {stock}: {e}")
+        return {"symbol": stock, "side": side, "error": str(e)}
+
 
 def check_transaction(stocks):
     try:
