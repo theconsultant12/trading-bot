@@ -269,7 +269,7 @@ def start_generate_list():
         bot_script_path = os.path.join(current_dir, 'generatelist.py')
         
         
-        process = subprocess.Popen(['python3', bot_script_path])
+        process = subprocess.Popen([sys.executable, bot_script_path])
         speak_with_polly(f"stock list generator has been started successfully.")
         return "stock list generator started with PID: " + str(process.pid)
     except Exception as e:
@@ -289,9 +289,9 @@ def start_trading_bot( dryrun, user_id):
         
         # Start the trading bot as a subprocess using python3
         if dryrun:
-            process = subprocess.Popen(['python3', bot_script_path, '-d', '-u', user_id])
+            process = subprocess.Popen([sys.executable, bot_script_path, '-d', '-u', user_id])
         else:
-            process = subprocess.Popen(['python3', bot_script_path, '-d', '-u', user_id])
+            process = subprocess.Popen([sys.executable, bot_script_path, '-d', '-u', user_id])
         speak_with_polly(f"{user_id}bot has been started successfully.")
     except Exception as e:
         error_message = f"Failed to start bot. Error: {str(e)}"
@@ -448,14 +448,20 @@ def speak_with_polly(text, voice_id="Joanna", output_format="mp3"):
 
 def recognize_voice():
     p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
+    try:
+        stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
+    except OSError as e:
+        logging.error(f"No audio input device available, cannot listen for voice commands: {e}")
+        p.terminate()
+        time.sleep(60)
+        return ""
     stream.start_stream()
-    
+
     logging.info("Listening for voice commands...")
     recognized_text = ""
-    
+
     start_time = time.time()  # Track time to manage response delay
-    
+
     while True:
         data = stream.read(2048, exception_on_overflow=False)
         if recognizer.AcceptWaveform(data):
@@ -878,7 +884,7 @@ def main():
     dryrun =True
 
     try:
-        subprocess.Popen(['python3', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jarvis_ui.py')])
+        subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jarvis_ui.py')])
     except Exception as e:
         logging.error(f"Failed to launch dashboard UI: {e}")
 
@@ -887,15 +893,15 @@ def main():
     ##########################################################
     ## TEST SUITE
     ##########################################################
-    logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
-    asyncio.run(keep_stream_alive(version="v2", feed="iex"))
+    # logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
+    # asyncio.run(keep_stream_alive(version="v2", feed="iex"))
   
     
-    for user in user_list[:int(n)]:
-        logging.debug(f"Starting bot for user {user}")
-        start_trading_bot(dryrun=dryrun, user_id=user)
-        time.sleep(180)
-    #     time.sleep(30)
+    # for user in user_list[:int(n)]:
+    #     logging.debug(f"Starting bot for user {user}")
+    #     start_trading_bot(dryrun=dryrun, user_id=user)
+    #     time.sleep(180)
+    # #     time.sleep(30)
             
     # logging.info(f"All {n} bots started successfully")
     # time.sleep(60)  # W
