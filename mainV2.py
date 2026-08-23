@@ -25,9 +25,6 @@ import robin_stocks.robinhood as rh
 boto3.setup_default_session(region_name='us-east-1')
 
 
-DAYCOUNT = 0
-DAILYAPILIMIT = 19000
-
 
 CARRIERS = {
     "att": "@mms.att.net",
@@ -43,6 +40,9 @@ def get_parameter_value(parameter_name):
     ssm = boto3.client('ssm')
     response = ssm.get_parameter(Name=parameter_name, WithDecryption=True)
     return response['Parameter']['Value']
+
+
+PID_FILE_PATH = None
 
 
 def create_pid_file(pid_file):
@@ -202,7 +202,6 @@ def wait_for_order_fills(stock_list: list[str], timeout: int = 360, interval: in
 def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
     """this looks at a stock and monitors till it is at the lowest. we get the average for 10 seconds then wait till the cost is low then buy returns a float"""
     prices = []
-    global DAYCOUNT 
     try:
         
        
@@ -242,32 +241,44 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
 
         else:
             logging.info(f"we have stocks in hand that is trying to be sold by one of the bots")
-        bought_stocks = wait_for_order_fills(stocks, order_side="buy")  
+        bought_stocks = wait_for_order_fills(stocks, order_side="buy")
+        filled_stocks = {}
         for stock, price in bought_stocks.items():
+            if price is None:
+                logging.warning(f"{stock} buy order did not fill in time; leaving it to expire, not selling")
+                continue
             record_transaction(user_id, stock, 'buy', price)
             total_cost += price
-        
-        count = 0
-        logging.info(f"waiting for {bought_stocks.keys()} price to rise current bought price is {total_cost}")
-       
+            filled_stocks[stock] = price
 
-        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in bought_stocks.keys()) < Decimal(total_cost) * Decimal("1.0012"): 
+        if not filled_stocks:
+            logging.info("No buy orders filled; nothing to sell")
+            return 0
+
+        count = 0
+        logging.info(f"waiting for {filled_stocks.keys()} price to rise current bought price is {total_cost}")
+
+
+        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in filled_stocks.keys()) < Decimal(total_cost) * Decimal("1.0012"):
             count += 1
             time.sleep(5)
             pass
 
-        with ThreadPoolExecutor(max_workers=len(stocks)) as executor:
-            futures = {executor.submit(run_sell, bought_stocks.keys()): stock for stock in bought_stocks.keys()}
+        with ThreadPoolExecutor(max_workers=len(filled_stocks)) as executor:
+            futures = {executor.submit(run_sell, stock): stock for stock in filled_stocks.keys()}
             for future in as_completed(futures):
                 stock, result = future.result()
                 sell_results[stock] = result
 
         
 
-        sold_stocks = wait_for_order_fills(bought_stocks.keys(), order_side="sell")
+        sold_stocks = wait_for_order_fills(filled_stocks.keys(), order_side="sell")
 
-        
+
         for stock, price in sold_stocks.items():
+            if price is None:
+                logging.warning(f"{stock} sell order did not fill in time")
+                continue
             record_transaction(user_id, stock, 'sell', price)
             total_sale += price
 
@@ -489,8 +500,7 @@ def remove_pid_file(pid_file):
 
 def signal_handler(signum, frame):
     """Handle termination signals"""
-    logging.info(f"Received signal {signum}. Performing cleanup...")
-    cleanup()
+    logging.info(f"Received signal {signum}. Shutting down...")
     sys.exit(0)
 
 # Register signal handlers
@@ -503,6 +513,8 @@ def cleanup():
     """Cleanup function to be called on exit"""
     try:
         closeDay()
+        if PID_FILE_PATH:
+            remove_pid_file(PID_FILE_PATH)
         logging.info("Cleanup completed successfully")
     except Exception as e:
         logging.error(f"Error during cleanup: {str(e)}")
@@ -568,11 +580,13 @@ def read_stocks_to_trade() -> list[str]:
 
 
 def main():
+    global PID_FILE_PATH
     try:
         # Update argument parser to include user_id
         parser = argparse.ArgumentParser(description='Trading bot configuration')
-        parser.add_argument('-d', '--dry_run', action='store_true', default=True, help='Run the bot without using money')
-        parser.add_argument('-u', '--user_id', type=str, required=False, 
+        parser.add_argument('-d', '--dry_run', action=argparse.BooleanOptionalAction, default=True,
+                          help='Run the bot without using money (pass --no-dry_run to place real trades)')
+        parser.add_argument('-u', '--user_id', type=str, required=False,
                           help='Unique identifier for the user')
 
         args = parser.parse_args()
@@ -582,8 +596,9 @@ def main():
 
         logging.basicConfig(filename=f'logs/trading-bot-logs/{args.user_id}-{current_date}app.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
-        
+
         pid_file_path = f'/tmp/{args.user_id}trading-bot-process.pid'
+        PID_FILE_PATH = pid_file_path
         create_pid_file(pid_file_path)
         logging.info(f"------------------------------------------------------------\n\nProcess started with PID: {os.getpid()}")
         atexit.register(cleanup)
@@ -620,7 +635,7 @@ def main():
         # message = f"Hello Olusola good day. We are about to start trading for the day. the starting balance is {startBalance}"
   
         
-        while canWeTrade(min_balance=0, max_balance=100000,alpaca_api_key=alpaca_api_key,alpaca_secret_key=alpaca_secret_key) == True and DAYCOUNT <= DAILYAPILIMIT:
+        while canWeTrade(min_balance=0, max_balance=100000,alpaca_api_key=alpaca_api_key,alpaca_secret_key=alpaca_secret_key) == True:
 
             logging.info(f"These are the stocks we are trading{topTrade}")
             
@@ -639,9 +654,6 @@ def main():
                 
             time.sleep(20)
 
-        if DAYCOUNT >= DAILYAPILIMIT:
-            reason = "daily api limit reached"  
-            logging.info(reason)  
         if startBalance - get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)- startBalance == 500:
             
             reason = "we lost 50 dollars already during today's trade"  

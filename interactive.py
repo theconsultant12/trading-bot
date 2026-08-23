@@ -9,7 +9,6 @@ import pyaudio
 import subprocess
 import signal
 import time
-import google.generativeai as genai
 import threading
 from mainV2 import  get_current_balance
 import logging
@@ -106,10 +105,9 @@ def get_parameter_value(parameter_name):
         logging.error(f"Error occurred while retrieving parameter '{parameter_name}': {str(e)}", exc_info=True)
         return None
 
-GEMINI_API_KEY = get_parameter_value("/gemini/api-key")
-GEMINI_MODEL = get_parameter_value("/gemini/model") or "gemini-2.0-flash"
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+LOCAL_AGENT_CLI = os.environ.get("JARVIS_AGENT_CLI", "claude")
+LOCAL_AGENT_MODEL = os.environ.get("JARVIS_AGENT_MODEL", "haiku")
+LOCAL_AGENT_TIMEOUT = 120  # seconds
 
 
 # Read the logs from a file
@@ -270,6 +268,8 @@ def start_generate_list():
         
         
         process = subprocess.Popen([sys.executable, bot_script_path])
+        with open('/tmp/generatelist-process.pid', 'w') as f:
+            f.write(str(process.pid))
         speak_with_polly(f"stock list generator has been started successfully.")
         return "stock list generator started with PID: " + str(process.pid)
     except Exception as e:
@@ -373,24 +373,47 @@ def stop_generate_list():
         return error_message
 
 
-# Function to send the log data to Gemini and get an explanation
+# Function to send the log data to a local claude agent and get an explanation
 def gpt_logs(keyword, log_text):
     logging.info(log_text)
-    if not GEMINI_API_KEY:
-        msg = "Log analysis unavailable: set SSM parameter /gemini/api-key."
-        logging.error(msg)
-        return msg
     prompt = (
         f"{keyword} the following logs in simple terms:\n\n{log_text}\n\n"
         "Make the response concise."
     )
-    model = genai.GenerativeModel(GEMINI_MODEL)
-    response = model.generate_content(prompt)
-    text = (response.text or "").strip()
-    if not text and getattr(response, "prompt_feedback", None):
-        logging.warning("Gemini returned no text: %s", response.prompt_feedback)
+    try:
+        result = subprocess.run(
+            [LOCAL_AGENT_CLI, "-p", prompt, "--tools", "", "--model", LOCAL_AGENT_MODEL,
+             "--output-format", "json"],
+            capture_output=True, text=True, timeout=LOCAL_AGENT_TIMEOUT
+        )
+    except FileNotFoundError:
+        msg = f"Log analysis unavailable: '{LOCAL_AGENT_CLI}' CLI not found on PATH."
+        logging.error(msg)
+        return msg
+    except subprocess.TimeoutExpired:
+        msg = "Log analysis timed out talking to the local agent."
+        logging.error(msg)
+        return msg
+
+    if result.returncode != 0:
+        msg = f"Log analysis failed: local agent exited {result.returncode}: {result.stderr.strip()}"
+        logging.error(msg)
+        return msg
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        logging.error(f"Could not parse local agent output: {result.stdout[:500]}")
+        return "No analysis returned from local agent."
+
+    if payload.get("is_error"):
+        msg = f"Local agent error: {payload.get('result')}"
+        logging.error(msg)
+        return msg
+
+    text = (payload.get("result") or "").strip()
     logging.info(text)
-    return text or "No analysis returned from Gemini."
+    return text or "No analysis returned from local agent."
 
 
 def currently_trading(n):
@@ -405,7 +428,55 @@ def currently_trading(n):
     else:
         logging.info("no bots running")
     return count
-          
+
+
+def get_system_status(n):
+    """Collect raw facts about everything Jarvis oversees: trading bots, the stock list
+    generator, and the live Alpaca price stream."""
+    running_bots = [user for user in user_list[:int(n)]
+                     if is_process_running(f'/tmp/{user}trading-bot-process.pid')]
+
+    generator_running = is_process_running('/tmp/generatelist-process.pid')
+
+    try:
+        shm = shared_memory.SharedMemory(name="alpaca_prices", create=False)
+        shm.close()
+        stream_running = True
+    except FileNotFoundError:
+        stream_running = False
+
+    try:
+        with open('stocks-to-trade.csv', 'r') as f:
+            watchlist = f.read().strip()
+    except FileNotFoundError:
+        watchlist = ""
+
+    traded_file = f"{datetime.now().strftime('%Y-%m-%d')}-traded.csv"
+    if os.path.exists(traded_file):
+        with open(traded_file, 'r') as f:
+            already_traded = f.read().strip()
+    else:
+        already_traded = "none yet"
+
+    return "\n".join([
+        f"Trading bots running: {len(running_bots)} of {n} ({', '.join(running_bots) if running_bots else 'none'})",
+        f"Stock list generator running: {'yes' if generator_running else 'no'}",
+        f"Live price stream active: {'yes' if stream_running else 'no'}",
+        f"Watchlist: {watchlist or 'empty'}",
+        f"Already claimed/traded today: {already_traded}",
+    ])
+
+
+def report_status(n):
+    """Ask the local agent to turn the raw status facts into a short spoken summary, then read it out."""
+    raw_status = get_system_status(n)
+    logging.info(f"Raw system status:\n{raw_status}")
+    summary = gpt_logs(
+        "Turn these system status facts into a short, friendly, spoken reply for a voice "
+        "assistant. Two sentences max. Only use the facts given, don't invent anything",
+        raw_status
+    )
+    speak_with_polly(summary)
 
 
 def get_time_of_day():
@@ -797,7 +868,7 @@ async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2"
             }))
 
             auth_response = await websocket.recv()
-            logging.info("[INFO] Auth response:", auth_response)
+            logging.info(f"[INFO] Auth response: {auth_response}")
 
             # Step 2: Initial ticker load
             current_tickers = read_tickers_from_file()
@@ -938,7 +1009,7 @@ def main():
             else:
                 speak_with_polly(f"Hey Sola, good {get_time_of_day()}. no bots are running now. do you need anything else")
 
-            speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading'")
+            speak_with_polly("Here are the list of prompts: 'read logs', 'are we trading', 'status'")
             voice_command = recognize_voice()
             if any(adj in voice_command for adj in adjectives):
                   all_logs = load_logs_for_analysis("today")
@@ -954,6 +1025,9 @@ def main():
             
             elif "report" in voice_command:
                 get_today_reports(n)
+
+            elif "status" in voice_command or "what is running" in voice_command or "what's running" in voice_command:
+                report_status(n)
 
             elif "trading" in voice_command:
                   currently_running = currently_trading(n)
