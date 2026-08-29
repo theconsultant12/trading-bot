@@ -18,6 +18,7 @@ from decimal import Decimal
 import robin_stocks.robinhood as rh
 import pytz  # Add this import at the top
 import asyncio
+import random
 import websockets
 from websockets.exceptions import ConnectionClosed
 from typing import Set, List, Dict, Tuple
@@ -792,35 +793,40 @@ def get_today_reports(n):
         return error_msg
     
 
-async def keep_stream_alive(version: str = "v2", feed: str = "iex"):
-    api_key = get_parameter_value("/alpaca/key")
-    secret_key = get_parameter_value("/alpaca/secret")
-    while True:
-        try:
-            await start_alpaca_stream(api_key, secret_key,version="v2", feed="iex")
-        except Exception as e:
-            logging.error(f"WebSocket crashed: {e}")
-            await asyncio.sleep(5)  # backoff
+STREAM_SHM_NAME = "alpaca_prices"
+STREAM_PRICE_MEM_SIZE = 1024  # bytes
 
 
 def read_tickers_from_file():
-    today = datetime.now().strftime("%Y-%m-%d")
     try:
-        with open(f"stocks-to-trade.csv", 'r') as f:
+        with open("stocks-to-trade.csv", 'r') as f:
             content = f.read().strip()
             tickers = [s.strip().upper() for s in content.split(',') if s.strip()]
             return set(tickers)
     except Exception as e:
         logging.info(f"Error reading ticker file: {e}")
         return set()
-    
-def build_sub_msg(action: str, tickers: Set[str]) -> dict:
-    return {
-        "action": action,
-        # "trades": list(tickers),
-        "quotes": list(tickers),
-        "bars": list(tickers)
-    }
+
+
+async def finnhub_send_subscriptions(websocket, action: str, tickers: Set[str]):
+    msg_type = "subscribe" if action == "subscribe" else "unsubscribe"
+    for ticker in sorted(tickers):
+        await websocket.send(json.dumps({"type": msg_type, "symbol": ticker}))
+
+
+def write_prices_to_shm(shm, symbol: str, price: float):
+    try:
+        raw_data = bytes(shm.buf[:]).decode(errors="ignore").strip('\x00')
+        current = json.loads(raw_data or "{}")
+    except json.JSONDecodeError:
+        logging.warning(f"Failed to decode JSON from shared memory. Raw data: {raw_data}")
+        current = {}
+
+    current[symbol] = price
+    encoded = json.dumps(current).encode()
+    shm.buf[:len(shm.buf)] = b'\x00' * len(shm.buf)
+    shm.buf[:len(encoded)] = encoded
+
 
 # ---- Monitor file for ticker changes every 10 minutes ----
 async def monitor_ticker_file(websocket, current_tickers: Set[str]):
@@ -832,100 +838,116 @@ async def monitor_ticker_file(websocket, current_tickers: Set[str]):
         to_remove = current_tickers - new_tickers
 
         if to_remove:
-            unsub_msg = build_sub_msg("unsubscribe", to_remove)
-            await websocket.send(json.dumps(unsub_msg))
+            await finnhub_send_subscriptions(websocket, "unsubscribe", to_remove)
             logging.info(f"[INFO] Unsubscribed from: {sorted(to_remove)}")
 
         if to_add:
-            sub_msg = build_sub_msg("subscribe", to_add)
-            await websocket.send(json.dumps(sub_msg))
+            await finnhub_send_subscriptions(websocket, "subscribe", to_add)
             logging.info(f"[INFO] Subscribed to: {sorted(to_add)}")
 
         current_tickers.clear()
         current_tickers.update(new_tickers)
 
 
-async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2", feed: str = "iex"):
-    logging.info(f"Connecting to Alpaca stream at wss://stream.data.alpaca.markets/{version}/{feed}")
-    url = f"wss://stream.data.alpaca.markets/{version}/{feed}"
-    logging.info(f"[INFO] Connecting to {url}...")
-
-    PRICE_MEM_SIZE = 1024  # bytes
-    SHM_NAME = "alpaca_prices"
+async def start_finnhub_stream(api_key: str, session_stats: dict):
+    url = f"wss://ws.finnhub.io?token={api_key}"
+    logging.info(f"[INFO] Connecting to Finnhub trade stream at {url.split('?')[0]}...")
 
     try:
-        shm = shared_memory.SharedMemory(create=True, size=PRICE_MEM_SIZE, name=SHM_NAME)
+        shm = shared_memory.SharedMemory(create=True, size=STREAM_PRICE_MEM_SIZE, name=STREAM_SHM_NAME)
     except FileExistsError:
-        shm = shared_memory.SharedMemory(create=False, name=SHM_NAME)
+        shm = shared_memory.SharedMemory(create=False, name=STREAM_SHM_NAME)
 
-    try:
-        async with websockets.connect(url) as websocket:
-            # Step 1: Authenticate
-            await websocket.send(json.dumps({
-                "action": "auth",
-                "key": api_key,
-                "secret": secret_key
-            }))
+    async with websockets.connect(url) as websocket:
+        current_tickers = read_tickers_from_file()
+        if not current_tickers:
+            logging.warning("[WARN] No tickers found on startup. Watching for future changes.")
 
-            auth_response = await websocket.recv()
-            logging.info(f"[INFO] Auth response: {auth_response}")
+        if current_tickers:
+            await finnhub_send_subscriptions(websocket, "subscribe", current_tickers)
+            logging.info(f"[INFO] Subscribed to: {sorted(current_tickers)}")
 
-            # Step 2: Initial ticker load
-            current_tickers = read_tickers_from_file()
-            if not current_tickers:
-                logging.warning("[WARN] No tickers found on startup. Watching for future changes.")
+        asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
 
-            # Step 3: Initial subscribe
-            if current_tickers:
-                sub_msg = build_sub_msg("subscribe", current_tickers)
-                await websocket.send(json.dumps(sub_msg))
-                logging.info(f"[INFO] Subscribed to: {sorted(current_tickers)}")
+        while True:
+            try:
+                msg = await websocket.recv()
+                data = json.loads(msg)
+                msg_type = data.get("type")
 
-            # Step 4: Start ticker file monitor
-            asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
+                if msg_type == "ping":
+                    await websocket.send(json.dumps({"type": "pong"}))
+                    continue
 
-            while True:
-                try:
-                    msg = await websocket.recv()
-                    data = json.loads(msg)
-                    
-                    for d in data:
-                        if d.get("T") == "b":  # Bar message
-                            symbol = d["S"]
-                            price = d["c"]
+                if msg_type != "trade":
+                    continue
 
-                            # Read current state from shared memory
-                            try:
-                                raw_data = bytes(shm.buf[:]).decode(errors="ignore").strip('\x00')
-                                current = json.loads(raw_data or "{}")
-                            except json.JSONDecodeError:
-                                logging.warning(f"Failed to decode JSON from shared memory. Raw data: {raw_data}")
-                                current = {}
+                trades = data.get("data") or []
+                session_stats["messages_received"] += len(trades)
+                session_stats["last_message_at"] = datetime.now()
 
-                            # Update with new price
-                            current[symbol] = price
+                for trade in trades:
+                    symbol = trade.get("s")
+                    price = trade.get("p")
+                    if not symbol or price is None:
+                        continue
+                    write_prices_to_shm(shm, symbol, price)
 
-                            # Serialize and write back to shared memory
-                            encoded = json.dumps(current).encode()
+            except json.JSONDecodeError:
+                logging.warning("Received non-JSON message from websocket.")
+            except ConnectionClosed as e:
+                logging.warning(f"Finnhub WebSocket connection closed at {datetime.now().isoformat()}: {e}")
+                break
+            except Exception as e:
+                logging.error(f"Unexpected error in Finnhub websocket loop: {e}")
+                await asyncio.sleep(1)
 
-                            # Zero out the buffer before writing
-                            shm.buf[:len(shm.buf)] = b'\x00' * len(shm.buf)
 
-                            # Write only up to the length of the encoded JSON
-                            shm.buf[:len(encoded)] = encoded
+async def keep_stream_alive():
+    api_key = get_parameter_value("/finnhub/key")
+    reconnect_attempt = 0
+    base_delay = 1.0
+    max_delay = 60.0
 
-                except json.JSONDecodeError:
-                    logging.warning("Received non-JSON message from websocket.")
-                except ConnectionClosed as e:
-                    logging.warning(f"WebSocket connection closed: {e}. Reconnecting...")
-                    break
-                except Exception as e:
-                    logging.error(f"Unexpected error in websocket loop: {e}")
-                    await asyncio.sleep(1)  # Optional: avoid tight crash loop
+    while True:
+        session_stats = {"messages_received": 0, "last_message_at": None}
+        disconnect_time = datetime.now()
 
-    except Exception as e:
-        logging.error(f"Stream error: {e}")
-        raise  # let keep_stream_alive()'s except/asyncio.sleep(5) actually back off
+        try:
+            if reconnect_attempt == 0:
+                logging.info(f"[INFO] Starting Finnhub trade stream at {disconnect_time.isoformat()}")
+            else:
+                logging.info(
+                    f"[INFO] Reconnecting to Finnhub at {disconnect_time.isoformat()} "
+                    f"(attempt {reconnect_attempt + 1})"
+                )
+            await start_finnhub_stream(api_key, session_stats)
+        except Exception as e:
+            disconnect_time = datetime.now()
+            logging.error(f"Finnhub WebSocket crashed at {disconnect_time.isoformat()}: {e}")
+
+        if session_stats["last_message_at"]:
+            gap_seconds = (disconnect_time - session_stats["last_message_at"]).total_seconds()
+            gap_info = f"{gap_seconds:.1f}s since last trade"
+        else:
+            gap_info = "no trades received this session"
+
+        logging.warning(
+            f"Finnhub disconnect at {disconnect_time.isoformat()}; "
+            f"trades this session: {session_stats['messages_received']}; "
+            f"data gap: {gap_info}"
+        )
+
+        reconnect_attempt += 1
+        if session_stats["messages_received"] > 0:
+            reconnect_attempt = 0
+
+        delay = min(max_delay, base_delay * (2 ** reconnect_attempt)) + random.uniform(0, 1)
+        logging.info(
+            f"Finnhub reconnect backoff: sleeping {delay:.1f}s before attempt "
+            f"{reconnect_attempt + 1}"
+        )
+        await asyncio.sleep(delay)
 
 
 def run_stream():
@@ -933,22 +955,21 @@ def run_stream():
     eastern = pytz.timezone('US/Eastern')
 
     while True:
-    
         now = datetime.now(eastern)
 
         # Run only Monday to Friday
         if now.weekday() < 5:
             # Wait for exactly 9:28 AM
             if now.hour == 9 and now.minute == 28 and not started:
-                logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
-                asyncio.run(keep_stream_alive(version="v2", feed="iex"))
+                logging.info("[INFO] Starting Finnhub WebSocket stream at 9:28 AM ET...")
+                asyncio.run(keep_stream_alive())
                 started = True
 
             # Reset the `started` flag after 9:29 AM
             if now.hour == 9 and now.minute > 29:
                 started = False
 
-        time.sleep(30) 
+        time.sleep(30)
 
 
 def main():
