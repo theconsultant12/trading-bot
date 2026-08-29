@@ -21,4 +21,5 @@ dependencies:
     - playsound
     - pyaudio
     - vosk
-    -pyttsx3
+    - pyttsx3
+    - alpaca-py

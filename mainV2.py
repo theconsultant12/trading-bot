@@ -259,7 +259,7 @@ def monitorBuy(stocks, dry, user_id, alpaca_api_key, alpaca_secret_key) -> int:
         logging.info(f"waiting for {filled_stocks.keys()} price to rise current bought price is {total_cost}")
 
 
-        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) for ticker in filled_stocks.keys()) < Decimal(total_cost) * Decimal("1.0012"):
+        while sum(Decimal(str(read_shared_prices().get(ticker, 0))) * quantity for ticker in filled_stocks.keys()) < Decimal(total_cost) * Decimal("1.0012"):
             count += 1
             time.sleep(5)
             pass
@@ -654,13 +654,12 @@ def main():
                 
             time.sleep(20)
 
-        if startBalance - get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)- startBalance == 500:
-            
-            reason = "we lost 50 dollars already during today's trade"  
-            logging.info(reason)    
-              
         endBalance = get_current_balance(alpaca_api_key=alpaca_api_key, alpaca_secret_key=alpaca_secret_key)
-        
+
+        if startBalance - endBalance >= 50:
+            reason = "we lost 50 dollars already during today's trade"
+            logging.info(reason)
+
         if endBalance > startBalance:
             word = "PROFIT"
         else:

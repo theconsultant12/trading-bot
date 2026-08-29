@@ -1,7 +1,8 @@
-tensor
+tensorflow
 pandas
 matplotlib
 robin_stocks
 boto3
 keras
 websockets
+alpaca-py

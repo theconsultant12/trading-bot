@@ -925,6 +925,7 @@ async def start_alpaca_stream(api_key: str, secret_key: str, version: str = "v2"
 
     except Exception as e:
         logging.error(f"Stream error: {e}")
+        raise  # let keep_stream_alive()'s except/asyncio.sleep(5) actually back off
 
 
 def run_stream():
@@ -938,13 +939,13 @@ def run_stream():
         # Run only Monday to Friday
         if now.weekday() < 5:
             # Wait for exactly 9:28 AM
-            if now.hour == 10 and now.minute == 28 and not started:
+            if now.hour == 9 and now.minute == 28 and not started:
                 logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
                 asyncio.run(keep_stream_alive(version="v2", feed="iex"))
                 started = True
 
             # Reset the `started` flag after 9:29 AM
-            if now.hour == 10 and now.minute > 29:
+            if now.hour == 9 and now.minute > 29:
                 started = False
 
         time.sleep(30) 
