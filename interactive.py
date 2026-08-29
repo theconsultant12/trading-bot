@@ -1,4 +1,5 @@
 import os
+import argparse
 import boto3
 from datetime import datetime, timedelta
 from playsound import playsound
@@ -280,6 +281,22 @@ def start_generate_list():
         return error_message
 
 
+_dashboard_started = False
+
+
+def start_dashboard():
+    global _dashboard_started
+    if _dashboard_started:
+        return
+    try:
+        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jarvis_ui.py')
+        subprocess.Popen([sys.executable, dashboard_path])
+        _dashboard_started = True
+        logging.info("Launched Jarvis dashboard UI")
+    except Exception as e:
+        logging.error(f"Failed to launch dashboard UI: {e}")
+
+
 def start_trading_bot( dryrun, user_id):
     try:
         # Get the current directory
@@ -300,15 +317,17 @@ def start_trading_bot( dryrun, user_id):
         speak_with_polly(error_message)
         return error_message
 
-def stop_trading_bot(n):
+def stop_trading_bot(n, grace_seconds=15, quiet=False):
     try:
         for user in user_list[:int(n)]:
             pid_file_path = f'/tmp/{user}trading-bot-process.pid'
             
             # Check if the PID file exists
             if not os.path.exists(pid_file_path):
-                speak_with_polly(f"{user} bot is not running.")
+                if not quiet:
+                    speak_with_polly(f"{user} bot is not running.")
                 logging.info(f"{user} bot is not running.")
+                continue
             
             # Read the PID from the file
             with open(pid_file_path, 'r') as f:
@@ -318,17 +337,19 @@ def stop_trading_bot(n):
             os.kill(pid, signal.SIGTERM)
             
             # Wait for a short time to allow the process to terminate
-            time.sleep(15)
+            time.sleep(grace_seconds)
             
             # Check if the process has terminated
             try:
                 os.kill(pid, 0)
                 # If we reach here, the process is still running
                 os.kill(pid, signal.SIGKILL)
-                speak_with_polly(f"{user} bot was forcefully terminated.")
+                if not quiet:
+                    speak_with_polly(f"{user} bot was forcefully terminated.")
             except OSError:
                 # Process has terminated
-                speak_with_polly(f"{user} bot has been stopped successfully.")
+                if not quiet:
+                    speak_with_polly(f"{user} bot has been stopped successfully.")
             
             # Remove the PID file
             os.remove(pid_file_path)
@@ -336,7 +357,8 @@ def stop_trading_bot(n):
         return f"{n} bot stopped."
     except Exception as e:
         error_message = f"Failed to stop trading bot. Error: {str(e)}"
-        speak_with_polly(error_message)
+        if not quiet:
+            speak_with_polly(error_message)
         return error_message
 
 
@@ -572,7 +594,7 @@ def auto_start_trading(n, dryrun):
     
     while True:
         if is_trading_time():
-            
+            start_dashboard()
             logging.info(f"Trading time detected. Starting {n} bots")
             speak_with_polly(f"Starting {n} trading bot with default settings.")
             
@@ -676,7 +698,8 @@ def monitor_trading_hours(n):
             
             try:
                 stop_trading_bot(n)
-                logging.info("Successfully stopped trading bots")
+                stop_price_stream()
+                logging.info("Successfully stopped trading bots and price stream")
                 
                 stop_generate_list()
                 message = f"Jarvis has stopped stock list generator and {n} trading bots. {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -690,10 +713,11 @@ def monitor_trading_hours(n):
         time.sleep(30)  # Check every 30 seconds
 
 def cleanup():
-    logging.info("Cleaning up: stopping all trading bots and terminating threads.")
+    logging.info("Cleaning up: stopping price stream, trading bots, and terminating threads.")
+    stop_price_stream()
     # Stop all trading bots
     n = len(user_list)  # Assuming you want to stop all bots
-    stop_trading_bot(n)
+    stop_trading_bot(n, quiet=True)
     
     # Optionally, you can add logic to join threads if needed
     # For example, if you have references to the threads, you can join them here
@@ -795,6 +819,32 @@ def get_today_reports(n):
 
 STREAM_SHM_NAME = "alpaca_prices"
 STREAM_PRICE_MEM_SIZE = 1024  # bytes
+_stream_shutdown = threading.Event()
+
+
+def stop_price_stream():
+    """Stop the Finnhub stream loop and release the shared-memory price segment."""
+    _stream_shutdown.set()
+    try:
+        shm = shared_memory.SharedMemory(name=STREAM_SHM_NAME, create=False)
+        shm.close()
+        shm.unlink()
+        logging.info("Price stream shared memory released")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logging.warning(f"Error releasing price stream shared memory: {e}")
+    logging.info("Price stream stop requested")
+
+
+async def _interruptible_sleep(seconds: float) -> bool:
+    """Sleep up to `seconds`, returning True if a stream shutdown was requested."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if _stream_shutdown.is_set():
+            return True
+        await asyncio.sleep(min(0.5, end - time.monotonic()))
+    return False
 
 
 def read_tickers_from_file():
@@ -830,8 +880,9 @@ def write_prices_to_shm(shm, symbol: str, price: float):
 
 # ---- Monitor file for ticker changes every 10 minutes ----
 async def monitor_ticker_file(websocket, current_tickers: Set[str]):
-    while True:
-        await asyncio.sleep(600)  # wait 10 minutes
+    while not _stream_shutdown.is_set():
+        if await _interruptible_sleep(600):
+            return
         new_tickers = read_tickers_from_file()
 
         to_add = new_tickers - current_tickers
@@ -869,9 +920,9 @@ async def start_finnhub_stream(api_key: str, session_stats: dict):
 
         asyncio.create_task(monitor_ticker_file(websocket, current_tickers))
 
-        while True:
+        while not _stream_shutdown.is_set():
             try:
-                msg = await websocket.recv()
+                msg = await asyncio.wait_for(websocket.recv(), timeout=1.0)
                 data = json.loads(msg)
                 msg_type = data.get("type")
 
@@ -895,6 +946,8 @@ async def start_finnhub_stream(api_key: str, session_stats: dict):
 
             except json.JSONDecodeError:
                 logging.warning("Received non-JSON message from websocket.")
+            except asyncio.TimeoutError:
+                continue
             except ConnectionClosed as e:
                 logging.warning(f"Finnhub WebSocket connection closed at {datetime.now().isoformat()}: {e}")
                 break
@@ -904,12 +957,13 @@ async def start_finnhub_stream(api_key: str, session_stats: dict):
 
 
 async def keep_stream_alive():
+    _stream_shutdown.clear()
     api_key = get_parameter_value("/finnhub/key")
     reconnect_attempt = 0
     base_delay = 1.0
     max_delay = 60.0
 
-    while True:
+    while not _stream_shutdown.is_set():
         session_stats = {"messages_received": 0, "last_message_at": None}
         disconnect_time = datetime.now()
 
@@ -925,6 +979,9 @@ async def keep_stream_alive():
         except Exception as e:
             disconnect_time = datetime.now()
             logging.error(f"Finnhub WebSocket crashed at {disconnect_time.isoformat()}: {e}")
+
+        if _stream_shutdown.is_set():
+            break
 
         if session_stats["last_message_at"]:
             gap_seconds = (disconnect_time - session_stats["last_message_at"]).total_seconds()
@@ -947,7 +1004,10 @@ async def keep_stream_alive():
             f"Finnhub reconnect backoff: sleeping {delay:.1f}s before attempt "
             f"{reconnect_attempt + 1}"
         )
-        await asyncio.sleep(delay)
+        if await _interruptible_sleep(delay):
+            break
+
+    logging.info("Finnhub price stream stopped")
 
 
 def run_stream():
@@ -972,43 +1032,67 @@ def run_stream():
         time.sleep(30)
 
 
+TEST_MODE_BOT_COUNT = 3
+TEST_MODE_BOT_DURATION_SECONDS = 60
+
+
+def run_test_mode(n=TEST_MODE_BOT_COUNT):
+    logging.info(
+        f"TEST MODE: starting {n} dry-run bots for {TEST_MODE_BOT_DURATION_SECONDS}s with live stream"
+    )
+    speak_with_polly(
+        f"Test mode active. Starting {n} bots in dry run mode for one minute."
+    )
+
+    start_dashboard()
+
+    stream_thread = threading.Thread(
+        target=lambda: asyncio.run(keep_stream_alive()),
+        name="test-stream",
+        daemon=True,
+    )
+    stream_thread.start()
+    logging.info("TEST MODE: Finnhub stream started")
+
+    for user in user_list[:int(n)]:
+        logging.info(f"TEST MODE: starting bot for {user}")
+        start_trading_bot(dryrun=True, user_id=user)
+
+    logging.info(f"TEST MODE: bots running; will stop in {TEST_MODE_BOT_DURATION_SECONDS}s")
+    time.sleep(TEST_MODE_BOT_DURATION_SECONDS)
+
+    logging.info(f"TEST MODE: stopping {n} bots")
+    stop_trading_bot(n, grace_seconds=3, quiet=True)
+    stop_price_stream()
+    speak_with_polly("Test mode bot session complete.")
+    logging.info("TEST MODE: bot session finished")
+
+
 def main():
-    n = 2
-    dryrun =True
+    parser = argparse.ArgumentParser(description='Jarvis interactive controller')
+    parser.add_argument(
+        '--test',
+        action='store_true',
+        help='Test mode: start stream and 3 dry-run bots immediately, stop bots after 1 minute',
+    )
+    args = parser.parse_args()
 
-    try:
-        subprocess.Popen([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jarvis_ui.py')])
-    except Exception as e:
-        logging.error(f"Failed to launch dashboard UI: {e}")
+    if args.test:
+        n = TEST_MODE_BOT_COUNT
+        dryrun = True
+    else:
+        n = 2
+        dryrun = True
 
+    if args.test:
+        test_thread = threading.Thread(target=run_test_mode, args=(n,), daemon=True)
+        test_thread.start()
+    else:
+        auto_start_thread = threading.Thread(target=auto_start_trading, args=(n, dryrun), daemon=True)
+        auto_start_thread.start()
 
-   
-    ##########################################################
-    ## TEST SUITE
-    ##########################################################
-    # logging.info("[INFO] Starting Alpaca WebSocket stream at 9:28 AM ET...")
-    # asyncio.run(keep_stream_alive(version="v2", feed="iex"))
-  
-    
-    # for user in user_list[:int(n)]:
-    #     logging.debug(f"Starting bot for user {user}")
-    #     start_trading_bot(dryrun=dryrun, user_id=user)
-    #     time.sleep(180)
-    # #     time.sleep(30)
-            
-    # logging.info(f"All {n} bots started successfully")
-    # time.sleep(60)  # W
-    ##########################################################
-    # END TEST SUITE
-    ##########################################################
-     # Start auto-trading checker in a separate thread
-    
-    auto_start_thread = threading.Thread(target=auto_start_trading, args=(n, dryrun), daemon=True)
-    auto_start_thread.start()
-
-
-    auto_stream_thread = threading.Thread(target=run_stream, daemon=True)
-    auto_stream_thread.start()
+        auto_stream_thread = threading.Thread(target=run_stream, daemon=True)
+        auto_stream_thread.start()
     
     # Add the trading hours monitor thread
     trading_hours_thread = threading.Thread(target=monitor_trading_hours, args=(n,), daemon=True)
